@@ -1,0 +1,22 @@
+[project]
+name = "foundry-agent"
+version = "0.1.0"
+description = "Multi-agent CLI orchestrator using Microsoft Agent Framework and Azure AI Foundry"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "agent-framework-azure-ai==1.0.0b260107",
+    "agent-framework-core==1.0.0b260107",
+    "azure-ai-agentserver-core==1.0.0b10",
+    "azure-ai-agentserver-agentframework==1.0.0b10",
+    "azure-ai-projects>=1.0.0b11",
+    "azure-identity>=1.20.0",
+    "openai>=1.30.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+foundry-agent = "main:main"
+
+[tool.uv]
+dev-dependencies = []

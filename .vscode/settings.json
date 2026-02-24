@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd /Users/reubencleetus/code/foundry/foundry-agent && /Users/reubencleetus/code/foundry/foundry-agent/\\.venv/bin/python -c \"\nimport ast, sys\n\nfiles = \\['foundry_tools\\.py', 'orchestrator\\.py', 'main\\.py'\\]\nok = True\nfor f in files:\n    try:\n        with open\\(f\\) as fh:\n            ast\\.parse\\(fh\\.read\\(\\)\\)\n        print\\(f'  ✓  \\{f\\}  — syntax OK'\\)\n    except SyntaxError as e:\n        print\\(f'  ✗  \\{f\\}  — SyntaxError: \\{e\\}'\\)\n        ok = False\n\nsys\\.exit\\(0 if ok else 1\\)\n\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

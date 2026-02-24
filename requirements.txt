@@ -1,0 +1,19 @@
+# Microsoft Agent Framework — pin to avoid breaking changes
+agent-framework-azure-ai==1.0.0b260107
+agent-framework-core==1.0.0b260107
+
+# HTTP server wrapper (enables future deployment to Foundry)
+azure-ai-agentserver-core==1.0.0b10
+azure-ai-agentserver-agentframework==1.0.0b10
+
+# Azure AI Projects SDK — used to invoke existing Foundry agents (AF, Niceify)
+azure-ai-projects>=1.0.0b11
+
+# Azure identity — DefaultAzureCredential for passwordless auth
+azure-identity>=1.20.0
+
+# OpenAI SDK — for direct OpenAI model calls (optional)
+openai>=1.30.0
+
+# Environment variable loading
+python-dotenv>=1.0.0
