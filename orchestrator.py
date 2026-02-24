@@ -34,7 +34,10 @@ Workflow Shape
 
 import logging
 import os
-from contextlib import asynccontextmanager
+import json
+import yaml
+import importlib
+from contextlib import asynccontextmanager, AsyncExitStack
 from typing import AsyncIterator
 from uuid import uuid4
 
@@ -61,23 +64,6 @@ from typing_extensions import Never
 from foundry_tools import call_af, call_niceify
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Orchestrator system prompt
-# ---------------------------------------------------------------------------
-
-ORCHESTRATOR_INSTRUCTIONS = """\
-You are an intelligent assistant and orchestrator for a multi-agent system.
-
-You have access to two specialist agents whose results are provided to you:
-
-• AF Agent   – Air Force aircraft specialist (F-22, F-35, B-2, etc.)
-• Niceify    – Transforms negative or sad content into a positive reframing
-
-When answering questions directly (no specialist needed), be clear and concise.
-When you receive specialist agent results, synthesise them into a final reply
-for the user—do not just echo the raw output verbatim.
-"""
 
 # ===========================================================================
 # ROUTING: KEYWORD-BASED  (ROUTING_MODE=keyword)
@@ -346,6 +332,37 @@ def _last_user_text(messages: list[ChatMessage]) -> str:
                 return msg.contents[-1].text
     return ""
 
+async def load_agents_dynamically(client, config_path="agents.yaml"):
+    """
+    Dynamically load agents from a YAML configuration file.
+    Returns an AsyncExitStack and a dictionary of loaded agents.
+    """
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+        
+    stack = AsyncExitStack()
+    agents = {}
+    
+    for name, details in config.get("agents", {}).items():
+        # 1. Dynamically resolve tool functions from strings (e.g., "local_agent.get_weather")
+        tools = []
+        for tool_path in details.get("tools", []):
+            module_name, func_name = tool_path.rsplit(".", 1)
+            module = importlib.import_module(module_name)
+            tools.append(getattr(module, func_name))
+            
+        # 2. Create the agent context manager
+        agent_ctx = client.create_agent(
+            name=name,
+            instructions=details.get("instructions", ""),
+            tools=tools if tools else None
+        )
+        
+        # 3. Enter the context and store the yielded agent
+        agents[name] = await stack.enter_async_context(agent_ctx)
+        
+    return stack, agents
+
 
 # ---------------------------------------------------------------------------
 # Workflow factory — async context manager
@@ -392,7 +409,6 @@ async def build_orchestrator(auto_niceify: bool = False) -> "AsyncIterator[Orche
 
 @asynccontextmanager
 async def _build_foundry_orchestrator(auto_niceify: bool):
-    from local_agent import LOCAL_AGENT_NAME, LOCAL_AGENT_INSTRUCTIONS, LOCAL_AGENT_TOOLS
     endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"]
     model = os.environ.get("FOUNDRY_MODEL_DEPLOYMENT_NAME", "gpt-4.1-mini")
     use_key_auth = os.environ.get("FOUNDRY_USE_KEY_AUTH", "false").lower() == "true"
@@ -406,51 +422,31 @@ async def _build_foundry_orchestrator(auto_niceify: bool):
             credential=key_cred,  # type: ignore[arg-type] — non-None check; auth_policy takes over
             authentication_policy=auth_policy,
         )
-        async with (
-            AzureAIClient(
-                project_client=project_client,
-                model_deployment_name=model,
-            ).create_agent(
-                name="OrchestratorDirectAgent",
-                instructions=ORCHESTRATOR_INSTRUCTIONS,
-            ) as direct_agent,
-            AzureAIClient(
-                project_client=project_client,
-                model_deployment_name=model,
-            ).create_agent(
-                name=LOCAL_AGENT_NAME,
-                instructions=LOCAL_AGENT_INSTRUCTIONS,
-                tools=LOCAL_AGENT_TOOLS,
-            ) as weather_agent
-        ):
-            yield _make_workflow(direct_agent, weather_agent, auto_niceify)
+        client = AzureAIClient(
+            project_client=project_client,
+            model_deployment_name=model,
+        )
+        stack, agents = await load_agents_dynamically(client, "agents.yaml")
+        try:
+            yield _make_workflow(agents["OrchestratorDirectAgent"], agents["WeatherAgent"], auto_niceify)
+        finally:
+            await stack.aclose()
     else:
         async with DefaultAzureCredential() as credential:
-            async with (
-                AzureAIClient(
-                    project_endpoint=endpoint,
-                    model_deployment_name=model,
-                    credential=credential,
-                ).create_agent(
-                    name="OrchestratorDirectAgent",
-                    instructions=ORCHESTRATOR_INSTRUCTIONS,
-                ) as direct_agent,
-                AzureAIClient(
-                    project_endpoint=endpoint,
-                    model_deployment_name=model,
-                    credential=credential,
-                ).create_agent(
-                    name=LOCAL_AGENT_NAME,
-                    instructions=LOCAL_AGENT_INSTRUCTIONS,
-                    tools=LOCAL_AGENT_TOOLS,
-                ) as weather_agent
-            ):
-                yield _make_workflow(direct_agent, weather_agent, auto_niceify)
+            client = AzureAIClient(
+                project_endpoint=endpoint,
+                model_deployment_name=model,
+                credential=credential,
+            )
+            stack, agents = await load_agents_dynamically(client, "agents.yaml")
+            try:
+                yield _make_workflow(agents["OrchestratorDirectAgent"], agents["WeatherAgent"], auto_niceify)
+            finally:
+                await stack.aclose()
 
 
 @asynccontextmanager
 async def _build_azure_openai_orchestrator(auto_niceify: bool):
-    from local_agent import LOCAL_AGENT_NAME, LOCAL_AGENT_INSTRUCTIONS, LOCAL_AGENT_TOOLS
     endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
     deployment = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
     use_key_auth = os.environ.get("FOUNDRY_USE_KEY_AUTH", "false").lower() == "true"
@@ -458,63 +454,36 @@ async def _build_azure_openai_orchestrator(auto_niceify: bool):
     if use_key_auth:
         # Pass api_key directly — AzureOpenAIChatClient uses it without any credential.
         api_key = os.environ["AZURE_OPENAI_API_KEY"]
-        direct_agent = (
-            AzureOpenAIChatClient(
-                endpoint=endpoint,
-                deployment_name=deployment,
-                api_key=api_key,
-            ).create_agent(
-                name="OrchestratorDirectAgent",
-                instructions=ORCHESTRATOR_INSTRUCTIONS,
-            )
+        client = AzureOpenAIChatClient(
+            endpoint=endpoint,
+            deployment_name=deployment,
+            api_key=api_key,
         )
-        weather_agent = (
-            AzureOpenAIChatClient(
-                endpoint=endpoint,
-                deployment_name=deployment,
-                api_key=api_key,
-            ).create_agent(
-                name=LOCAL_AGENT_NAME,
-                instructions=LOCAL_AGENT_INSTRUCTIONS,
-                tools=LOCAL_AGENT_TOOLS,
-            )
-        )
-        yield _make_workflow(direct_agent, weather_agent, auto_niceify)
+        stack, agents = await load_agents_dynamically(client, "agents.yaml")
+        try:
+            yield _make_workflow(agents["OrchestratorDirectAgent"], agents["WeatherAgent"], auto_niceify)
+        finally:
+            await stack.aclose()
     else:
         # AzureOpenAIChatClient calls get_entra_auth_token synchronously,
         # so it requires a sync TokenCredential (azure.identity, not .aio).
         credential = SyncDefaultAzureCredential()
-        direct_agent = (
-            AzureOpenAIChatClient(
-                endpoint=endpoint,
-                deployment_name=deployment,
-                credential=credential,
-            ).create_agent(
-                name="OrchestratorDirectAgent",
-                instructions=ORCHESTRATOR_INSTRUCTIONS,
-            )
+        client = AzureOpenAIChatClient(
+            endpoint=endpoint,
+            deployment_name=deployment,
+            credential=credential,
         )
-        weather_agent = (
-            AzureOpenAIChatClient(
-                endpoint=endpoint,
-                deployment_name=deployment,
-                credential=credential,
-            ).create_agent(
-                name=LOCAL_AGENT_NAME,
-                instructions=LOCAL_AGENT_INSTRUCTIONS,
-                tools=LOCAL_AGENT_TOOLS,
-            )
-        )
+        stack, agents = await load_agents_dynamically(client, "agents.yaml")
         try:
-            yield _make_workflow(direct_agent, weather_agent, auto_niceify)
+            yield _make_workflow(agents["OrchestratorDirectAgent"], agents["WeatherAgent"], auto_niceify)
         finally:
+            await stack.aclose()
             credential.close()
 
 
 @asynccontextmanager
 async def _build_openai_orchestrator(auto_niceify: bool):
     from agent_framework.openai import OpenAIChatClient
-    from local_agent import LOCAL_AGENT_NAME, LOCAL_AGENT_INSTRUCTIONS, LOCAL_AGENT_TOOLS
 
     model_name = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
     api_key = os.environ["OPENAI_API_KEY"]
@@ -524,18 +493,11 @@ async def _build_openai_orchestrator(auto_niceify: bool):
         api_key=api_key,
     )
     
-    direct_agent = client.create_agent(
-        name="OrchestratorDirectAgent",
-        instructions=ORCHESTRATOR_INSTRUCTIONS,
-    )
-    
-    weather_agent = client.create_agent(
-        name=LOCAL_AGENT_NAME,
-        instructions=LOCAL_AGENT_INSTRUCTIONS,
-        tools=LOCAL_AGENT_TOOLS,
-    )
-    
-    yield _make_workflow(direct_agent, weather_agent, auto_niceify)
+    stack, agents = await load_agents_dynamically(client, "agents.yaml")
+    try:
+        yield _make_workflow(agents["OrchestratorDirectAgent"], agents["WeatherAgent"], auto_niceify)
+    finally:
+        await stack.aclose()
 
 
 def _make_workflow(direct_agent, weather_agent, auto_niceify: bool) -> "OrchestratorWorkflow":

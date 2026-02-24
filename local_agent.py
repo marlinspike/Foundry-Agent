@@ -13,10 +13,3 @@ def get_weather(location: str) -> str:
     """Get the current weather for a given location."""
     # Mock implementation for demonstration purposes
     return f"The weather in {location} is sunny and 72°F."
-
-LOCAL_AGENT_NAME = "WeatherAgent"
-LOCAL_AGENT_INSTRUCTIONS = (
-    "You are a helpful weather assistant. "
-    "Use the get_weather tool to answer questions about the weather."
-)
-LOCAL_AGENT_TOOLS = [get_weather]

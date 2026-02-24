@@ -17,3 +17,6 @@ openai>=1.30.0
 
 # Environment variable loading
 python-dotenv>=1.0.0
+
+# YAML parsing for declarative agents
+pyyaml>=6.0.1
