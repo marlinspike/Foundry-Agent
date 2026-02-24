@@ -109,6 +109,11 @@ _NICEIFY_KEYWORDS = frozenset([
     "good news version",
 ])
 
+_WEATHER_KEYWORDS = frozenset([
+    "weather", "temperature", "forecast", "rain", "sunny", "cloudy",
+    "how hot", "how cold", "is it raining"
+])
+
 # Used by auto_niceify post-processing (both routing modes).
 _NEGATIVE_KEYWORDS = frozenset([
     "crash", "fail", "disaster", "accident", "tragic", "fatal",
@@ -121,11 +126,12 @@ def _keyword_route(text: str) -> str:
     """
     Classify intent using keyword matching.
 
-    Returns one of: "aircraft", "niceify", "both", "direct".
+    Returns one of: "aircraft", "niceify", "both", "weather", "direct".
     """
     lower = text.lower()
     aircraft = sum(1 for kw in _AIRCRAFT_KEYWORDS if kw in lower) > 0
     niceify = any(kw in lower for kw in _NICEIFY_KEYWORDS)
+    weather = any(kw in lower for kw in _WEATHER_KEYWORDS)
 
     if aircraft and niceify:
         return "both"
@@ -133,6 +139,8 @@ def _keyword_route(text: str) -> str:
         return "aircraft"
     if niceify:
         return "niceify"
+    if weather:
+        return "weather"
     return "direct"
 
 
@@ -167,6 +175,7 @@ Choose exactly one value:
                reframed in a positive or uplifting way.
   "both"     — the user wants aircraft information AND a positive/uplifting spin
                on the answer.
+  "weather"  — the user is asking about the weather, temperature, or forecast.
   "direct"   — everything else (general knowledge, greetings, unrelated topics).
 
 Respond with ONLY valid JSON, e.g.: {{"route": "aircraft"}}
@@ -186,12 +195,14 @@ class OrchestratorExecutor(Executor):
     Parameters
     ----------
     direct_agent:   A ChatAgent used for general (non-specialist) questions.
+    weather_agent:  A local ChatAgent used for weather questions.
     auto_niceify:   If True, AF responses with negative sentiment are
                     automatically piped through the Niceify agent.
     """
 
-    def __init__(self, direct_agent, auto_niceify: bool = False, id: str = "Orchestrator") -> None:
+    def __init__(self, direct_agent, weather_agent, auto_niceify: bool = False, id: str = "Orchestrator") -> None:
         self._direct_agent = direct_agent
+        self._weather_agent = weather_agent
         self.auto_niceify = auto_niceify
         # Read ROUTING_MODE once at construction time.
         # Set ROUTING_MODE=model in .env to enable model-based routing.
@@ -250,6 +261,11 @@ class OrchestratorExecutor(Executor):
             await self._emit_status(ctx, "Calling Niceify agent…")
             final = await call_niceify(user_text)
 
+        elif route == "weather":
+            # User wants weather info.
+            await self._emit_status(ctx, "Calling local Weather agent…")
+            final = await self._weather_answer(messages)
+
         else:  # "direct"
             # General question — answer directly with the model.
             await self._emit_status(ctx, "Thinking…")
@@ -264,13 +280,18 @@ class OrchestratorExecutor(Executor):
         response = await self._direct_agent.run(messages)
         return response.text
 
+    async def _weather_answer(self, messages: list[ChatMessage]) -> str:
+        """Run the conversation through the local WeatherAgent."""
+        response = await self._weather_agent.run(messages)
+        return response.text
+
     # ── model-based routing (ROUTING_MODE=model) ──────────────────────────────
 
     async def _model_route(self, user_text: str) -> str:
         """
         Ask the model to classify the user's intent.
 
-        Returns one of: "aircraft", "niceify", "both", "direct".
+        Returns one of: "aircraft", "niceify", "both", "weather", "direct".
         Falls back to "direct" if the response cannot be parsed.
         """
         import json
@@ -285,7 +306,7 @@ class OrchestratorExecutor(Executor):
                 raw = raw[4:].strip()
             data = json.loads(raw)
             route = data.get("route", "direct").lower().strip()
-            if route not in ("aircraft", "niceify", "both", "direct"):
+            if route not in ("aircraft", "niceify", "both", "weather", "direct"):
                 logger.warning(
                     "[Orchestrator] model returned unknown route %r — using 'direct'",
                     route,
@@ -371,6 +392,7 @@ async def build_orchestrator(auto_niceify: bool = False) -> "AsyncIterator[Orche
 
 @asynccontextmanager
 async def _build_foundry_orchestrator(auto_niceify: bool):
+    from local_agent import LOCAL_AGENT_NAME, LOCAL_AGENT_INSTRUCTIONS, LOCAL_AGENT_TOOLS
     endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"]
     model = os.environ.get("FOUNDRY_MODEL_DEPLOYMENT_NAME", "gpt-4.1-mini")
     use_key_auth = os.environ.get("FOUNDRY_USE_KEY_AUTH", "false").lower() == "true"
@@ -391,9 +413,17 @@ async def _build_foundry_orchestrator(auto_niceify: bool):
             ).create_agent(
                 name="OrchestratorDirectAgent",
                 instructions=ORCHESTRATOR_INSTRUCTIONS,
-            ) as direct_agent
+            ) as direct_agent,
+            AzureAIClient(
+                project_client=project_client,
+                model_deployment_name=model,
+            ).create_agent(
+                name=LOCAL_AGENT_NAME,
+                instructions=LOCAL_AGENT_INSTRUCTIONS,
+                tools=LOCAL_AGENT_TOOLS,
+            ) as weather_agent
         ):
-            yield _make_workflow(direct_agent, auto_niceify)
+            yield _make_workflow(direct_agent, weather_agent, auto_niceify)
     else:
         async with DefaultAzureCredential() as credential:
             async with (
@@ -404,13 +434,23 @@ async def _build_foundry_orchestrator(auto_niceify: bool):
                 ).create_agent(
                     name="OrchestratorDirectAgent",
                     instructions=ORCHESTRATOR_INSTRUCTIONS,
-                ) as direct_agent
+                ) as direct_agent,
+                AzureAIClient(
+                    project_endpoint=endpoint,
+                    model_deployment_name=model,
+                    credential=credential,
+                ).create_agent(
+                    name=LOCAL_AGENT_NAME,
+                    instructions=LOCAL_AGENT_INSTRUCTIONS,
+                    tools=LOCAL_AGENT_TOOLS,
+                ) as weather_agent
             ):
-                yield _make_workflow(direct_agent, auto_niceify)
+                yield _make_workflow(direct_agent, weather_agent, auto_niceify)
 
 
 @asynccontextmanager
 async def _build_azure_openai_orchestrator(auto_niceify: bool):
+    from local_agent import LOCAL_AGENT_NAME, LOCAL_AGENT_INSTRUCTIONS, LOCAL_AGENT_TOOLS
     endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
     deployment = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
     use_key_auth = os.environ.get("FOUNDRY_USE_KEY_AUTH", "false").lower() == "true"
@@ -428,7 +468,18 @@ async def _build_azure_openai_orchestrator(auto_niceify: bool):
                 instructions=ORCHESTRATOR_INSTRUCTIONS,
             )
         )
-        yield _make_workflow(direct_agent, auto_niceify)
+        weather_agent = (
+            AzureOpenAIChatClient(
+                endpoint=endpoint,
+                deployment_name=deployment,
+                api_key=api_key,
+            ).create_agent(
+                name=LOCAL_AGENT_NAME,
+                instructions=LOCAL_AGENT_INSTRUCTIONS,
+                tools=LOCAL_AGENT_TOOLS,
+            )
+        )
+        yield _make_workflow(direct_agent, weather_agent, auto_niceify)
     else:
         # AzureOpenAIChatClient calls get_entra_auth_token synchronously,
         # so it requires a sync TokenCredential (azure.identity, not .aio).
@@ -443,65 +494,56 @@ async def _build_azure_openai_orchestrator(auto_niceify: bool):
                 instructions=ORCHESTRATOR_INSTRUCTIONS,
             )
         )
+        weather_agent = (
+            AzureOpenAIChatClient(
+                endpoint=endpoint,
+                deployment_name=deployment,
+                credential=credential,
+            ).create_agent(
+                name=LOCAL_AGENT_NAME,
+                instructions=LOCAL_AGENT_INSTRUCTIONS,
+                tools=LOCAL_AGENT_TOOLS,
+            )
+        )
         try:
-            yield _make_workflow(direct_agent, auto_niceify)
+            yield _make_workflow(direct_agent, weather_agent, auto_niceify)
         finally:
             credential.close()
 
 
 @asynccontextmanager
 async def _build_openai_orchestrator(auto_niceify: bool):
-    """
-    Uses the raw openai.AsyncOpenAI client wrapped in a thin ChatAgent shim
-    so it integrates with Agent Framework's ChatAgent interface.
-    """
-    import openai as _openai
+    from agent_framework.openai import OpenAIChatClient
+    from local_agent import LOCAL_AGENT_NAME, LOCAL_AGENT_INSTRUCTIONS, LOCAL_AGENT_TOOLS
 
     model_name = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
+    api_key = os.environ["OPENAI_API_KEY"]
 
-    class _OpenAIDirectAgent:
-        """Minimal shim so OrchestratorExecutor can call .run(messages)."""
-
-        def __init__(self):
-            self._client = _openai.AsyncOpenAI(
-                api_key=os.environ["OPENAI_API_KEY"]
-            )
-
-        async def run(self, messages: list[ChatMessage]):
-            oai_messages = [
-                {"role": "system", "content": ORCHESTRATOR_INSTRUCTIONS},
-            ]
-            for m in messages:
-                role = "user" if m.role == Role.USER else "assistant"
-                text = m.contents[-1].text if m.contents else ""
-                oai_messages.append({"role": role, "content": text})
-
-            response = await self._client.chat.completions.create(
-                model=model_name,
-                messages=oai_messages,
-            )
-
-            class _Resp:
-                text = response.choices[0].message.content or ""
-
-            return _Resp()
-
-        async def aclose(self):
-            await self._client.close()
-
-    agent = _OpenAIDirectAgent()
-    try:
-        yield _make_workflow(agent, auto_niceify)
-    finally:
-        await agent.aclose()
+    client = OpenAIChatClient(
+        model_id=model_name,
+        api_key=api_key,
+    )
+    
+    direct_agent = client.create_agent(
+        name="OrchestratorDirectAgent",
+        instructions=ORCHESTRATOR_INSTRUCTIONS,
+    )
+    
+    weather_agent = client.create_agent(
+        name=LOCAL_AGENT_NAME,
+        instructions=LOCAL_AGENT_INSTRUCTIONS,
+        tools=LOCAL_AGENT_TOOLS,
+    )
+    
+    yield _make_workflow(direct_agent, weather_agent, auto_niceify)
 
 
-def _make_workflow(direct_agent, auto_niceify: bool) -> "OrchestratorWorkflow":
+def _make_workflow(direct_agent, weather_agent, auto_niceify: bool) -> "OrchestratorWorkflow":
     """Build the AgentFramework workflow and wrap it in OrchestratorWorkflow."""
     workflow = (
         WorkflowBuilder()
         .register_executor(
-            lambda: OrchestratorExecutor(direct_agent, auto_niceify),
+            lambda: OrchestratorExecutor(direct_agent, weather_agent, auto_niceify),
             name="Orchestrator",
         )
         .set_start_executor("Orchestrator")
