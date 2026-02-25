@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import orchestrator as orch_module
-from orchestrator import _invoke_agent, delegate_to_multiple_agents
+import agent.orchestrator as orch_module
+from agent.orchestrator import _invoke_agent, delegate_to_multiple_agents
 
 
 # ---------------------------------------------------------------------------

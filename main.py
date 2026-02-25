@@ -29,8 +29,8 @@ from dotenv import load_dotenv
 # Load .env before importing any project modules so env vars are available.
 load_dotenv(override=True)
 
-from foundry_tools import call_af, call_niceify, close_client
-from orchestrator import build_orchestrator
+from agent.foundry_tools import call_af, call_niceify, close_client
+from agent.orchestrator import build_orchestrator
 
 # ---------------------------------------------------------------------------
 # Logging

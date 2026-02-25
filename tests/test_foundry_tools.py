@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 # Add parent directory to path so we can import from the root
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from foundry_tools import _resolve_agent_id, invoke_foundry_agent
+from agent.foundry_tools import _resolve_agent_id, invoke_foundry_agent
 
 class AsyncIteratorMock:
     def __init__(self, items):

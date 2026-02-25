@@ -17,13 +17,18 @@ orchestrator:
        agents simultaneously, use `delegate_to_multiple_agents` to fan-out in parallel.
        Construct an `agent_queries` list — one entry per relevant agent — and call the tool
        once. Do NOT call `delegate_to_agent` repeatedly in sequence for multi-domain queries.
-    4. If a user's request CANNOT be handled by any of the specialist agents above,
-       reply with a gentle but firm message stating that you cannot assist with that request.
-    5. When you receive specialist agent results, synthesise them into a single, coherent
-       final reply for the user — do not echo raw output verbatim.
+    4. If a user's request maps to a Named Pipeline listed in your instructions, use
+       `run_pipeline` with the exact pipeline name and the user's input. Pipelines execute
+       their steps in order automatically — do NOT call each step manually.
+    5. If a user's request CANNOT be handled by any of the specialist agents or pipelines
+       above, reply with a gentle but firm message stating that you cannot assist with that
+       request.
+    6. When you receive specialist agent or pipeline results, synthesise them into a single,
+       coherent final reply for the user — do not echo raw output verbatim.
   tools:
-    - orchestrator.delegate_to_agent
-    - orchestrator.delegate_to_multiple_agents
+    - agent.orchestrator.delegate_to_agent
+    - agent.orchestrator.delegate_to_multiple_agents
+    - agent.orchestrator.run_pipeline
 
 local_agents:
   WeatherAgent:
@@ -31,7 +36,7 @@ local_agents:
     instructions: |
       You are a helpful weather assistant. Use the get_weather tool to answer questions about the weather.
     tools:
-      - local_agent.get_weather
+      - agent.local_agent.get_weather
 
   DadJokeAgent:
     description: "Specialist for generating dad jokes."
@@ -45,6 +50,19 @@ local_agents:
       You are a hilarious knock-knock joke assistant. Your goal is to create a funny, original knock-knock joke based on the topic or context provided by the user.
       Do not use any tools, just generate the joke directly.
 
+  Uplifting:
+    description: "Transforms any text into a warm, positive, uplifting reframing. Local-only alternative to the Niceify Foundry agent — no cloud credentials required."
+    instructions: |
+      You are an expert at positive reframing. You receive a piece of text and your sole job is to
+      rewrite it in the most warm, encouraging, and uplifting way possible, while preserving the
+      original meaning and all key details.
+
+      Rules:
+      - Do NOT add new facts or change the subject matter.
+      - Keep roughly the same length as the input.
+      - Use warm, enthusiastic language. Avoid negativity, pessimism, or sarcasm.
+      - Do not use any tools — respond with the reframed text only.
+
 foundry_agents:
   AF:
     description: "Air Force aircraft specialist (F-22, F-35, B-2, etc.)"
@@ -52,3 +70,16 @@ foundry_agents:
   Niceify:
     description: "Transforms negative or sad content into a positive reframing"
     env_var: "NICEIFY_AGENT_NAME"
+
+pipelines:
+  NiceJoke:
+    description: "Generates a dad joke then gives it an uplifting, positive spin"
+    steps:
+      - agent: DadJokeAgent
+      - agent: Uplifting
+
+  KnockKnockNice:
+    description: "Generates a knock-knock joke then gives it a positive, uplifting spin"
+    steps:
+      - agent: KnockKnockJokeAgent
+      - agent: Uplifting

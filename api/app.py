@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Load environment variables before importing orchestrator
 load_dotenv(override=True)
 
-from orchestrator import build_orchestrator, OrchestratorWorkflow
+from agent.orchestrator import build_orchestrator, OrchestratorWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -156,4 +156,4 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("api.app:app", host="0.0.0.0", port=8000, reload=True)

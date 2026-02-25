@@ -9,7 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 load_dotenv(override=True)
 
-from orchestrator import build_orchestrator
+from agent.orchestrator import build_orchestrator
 
 @pytest.mark.asyncio
 async def test_orchestrator_basic_routing():

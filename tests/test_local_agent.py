@@ -5,7 +5,7 @@ import os
 # Add parent directory to path so we can import from the root
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from local_agent import get_weather
+from agent.local_agent import get_weather
 
 def test_get_weather():
     """Test the get_weather tool."""

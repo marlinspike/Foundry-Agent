@@ -9,7 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 load_dotenv(override=True)
 
-from orchestrator import build_orchestrator, _global_agents
+from agent.orchestrator import build_orchestrator, _global_agents
 from agent_framework import ChatMessage, Role
 
 logging.basicConfig(level=logging.DEBUG)

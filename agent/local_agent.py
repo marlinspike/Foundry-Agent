@@ -1,5 +1,5 @@
 """
-local_agent.py
+agent/local_agent.py
 --------------
 A sample local agent that uses a tool to get the weather.
 This demonstrates how to mix local agents (using agent_framework)

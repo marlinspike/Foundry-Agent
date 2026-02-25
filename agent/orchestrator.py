@@ -1,5 +1,5 @@
 """
-orchestrator.py
+agent/orchestrator.py
 ---------------
 Agent Framework workflow that routes user prompts to the right specialists.
 
@@ -39,6 +39,7 @@ from agent_framework import (
     Role,
     ai_function,
 )
+from agent.pipeline import Pipeline, load_pipelines
 from agent_framework.azure import AzureAIClient, AzureOpenAIChatClient
 from azure.ai.projects.aio import AIProjectClient as AsyncAIProjectClient
 from azure.core.credentials import AzureKeyCredential
@@ -51,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 _global_agents = {}
 _foundry_agent_map = {}
+_pipeline_registry: dict[str, Pipeline] = {}
 
 async def _invoke_agent(agent_name: str, query: str) -> str:
     """Core coroutine: invoke a single named agent with a query. Shared by both delegation tools."""
@@ -60,7 +62,7 @@ async def _invoke_agent(agent_name: str, query: str) -> str:
         return response.text
 
     # 2. Check Foundry agents (only if explicitly mapped in config)
-    from foundry_tools import invoke_foundry_agent
+    from agent.foundry_tools import invoke_foundry_agent
 
     if agent_name in _foundry_agent_map:
         try:
@@ -82,6 +84,46 @@ async def delegate_to_agent(agent_name: str, query: str) -> str:
     Provide the exact agent_name as listed in your instructions.
     """
     return await _invoke_agent(agent_name, query)
+
+
+@ai_function
+async def run_pipeline(pipeline_name: str, initial_input: str) -> str:
+    """
+    Execute a named agent pipeline defined in agents.yaml.
+
+    The pipeline runs its steps in order; the output of each step is fed as
+    input to the next.  Use this when the user's request maps to a named
+    pipeline rather than a single specialist agent.
+
+    Provide the exact pipeline_name as listed in your instructions.
+    """
+    pipeline = _pipeline_registry.get(pipeline_name)
+    if not pipeline:
+        available = ", ".join(_pipeline_registry.keys()) or "none"
+        return (
+            f"Error: Pipeline '{pipeline_name}' not found. "
+            f"Available pipelines: {available}"
+        )
+
+    if not pipeline.steps:
+        return f"Error: Pipeline '{pipeline_name}' has no steps configured."
+
+    current = initial_input
+    for i, step in enumerate(pipeline.steps):
+        logger.info(
+            "[Pipeline %s] step %d/%d -> %s",
+            pipeline_name, i + 1, len(pipeline.steps), step.agent,
+        )
+        current = await _invoke_agent(step.agent, current)
+        # Abort early if a step signals an error so the caller is informed
+        # exactly which step in the chain failed.
+        if current.startswith("Error:"):
+            return (
+                f"Pipeline '{pipeline_name}' failed at step {i + 1} "
+                f"({step.agent}): {current}"
+            )
+
+    return current
 
 
 @ai_function
@@ -206,8 +248,9 @@ async def _load_agents_dynamically(client, config_path="agents.yaml"):
         
     stack = AsyncExitStack()
     agents = {}
-    agent_list_lines = []
-    
+    agent_section_lines: list[str] = []
+    pipeline_section_lines: list[str] = []
+
     async def _create(name: str, details: dict):
         tools = [
             getattr(importlib.import_module(m), f)
@@ -219,20 +262,40 @@ async def _load_agents_dynamically(client, config_path="agents.yaml"):
             tools=tools or None
         )
         agents[name] = _global_agents[name] = await stack.enter_async_context(agent_ctx)
-        
+
     for name, details in config.get("local_agents", {}).items():
         desc = details.get("description", "No description provided.")
-        agent_list_lines.append(f"    • {name} - {desc}")
+        agent_section_lines.append(f"    • {name} - {desc}")
         await _create(name, details)
-        
+
     # Load Foundry agent mappings
     for name, details in config.get("foundry_agents", {}).items():
         desc = details.get("description", "No description provided.")
-        agent_list_lines.append(f"    • {name} - {desc}")
+        agent_section_lines.append(f"    • {name} - {desc}")
         if env_var := details.get("env_var"):
             _foundry_agent_map[name] = env_var
-            
-    agent_list_str = "\n".join(agent_list_lines)
+
+    # Load declarative pipelines
+    pipelines = load_pipelines(config)
+    _pipeline_registry.clear()
+    _pipeline_registry.update(pipelines)
+    for name, pipeline in pipelines.items():
+        pipeline_section_lines.append(
+            f"    • {name} - {pipeline.description}  [Steps: {pipeline.step_summary}]"
+        )
+
+    # Build the combined AGENT_LIST block injected into the orchestrator prompt
+    agent_list_parts = [
+        "Specialist Agents (use `delegate_to_agent` or `delegate_to_multiple_agents`):",
+        *agent_section_lines,
+    ]
+    if pipeline_section_lines:
+        agent_list_parts += [
+            "",
+            "Named Pipelines (ordered agent chains — use `run_pipeline`):",
+            *pipeline_section_lines,
+        ]
+    agent_list_str = "\n".join(agent_list_parts)
         
     orch = config.get("orchestrator", {})
     orch_name = orch.get("name", "OrchestratorDirectAgent")
