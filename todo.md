@@ -9,7 +9,7 @@ This document tracks the planned architectural enhancements and innovations for 
 Currently, the orchestrator's instructions in `agents.yaml` manually list the available agents. If someone adds a new agent, they must remember to update the orchestrator's prompt. We will dynamically inject the list of available agents and their descriptions into the orchestrator's system prompt at runtime. In `_load_agents_dynamically`, we can iterate through `local_agents` and `foundry_agents`, build a formatted string of their names and descriptions, and inject it into a placeholder (e.g., `{{AGENT_LIST}}`) in the orchestrator's instructions. This makes adding new agents truly "zero-touch" for the routing logic.
 
 ## 2. Parallel Delegation (Multi-Agent Collaboration)
-**Status:** Not Started
+**Status:** Completed
 
 **Synopsis:** 
 Currently, the `delegate_to_agent` tool takes a single `agent_name`. If a user asks a complex question, the orchestrator has to pick one or call them sequentially. We will enhance the routing to support parallel execution. We can modify the tool to accept a list of agents: `delegate_to_multiple_agents(agent_queries: list[dict])`. The orchestrator could then fan-out requests to multiple agents concurrently using `asyncio.gather`, and synthesize their combined responses much faster.
@@ -27,7 +27,7 @@ Currently, the orchestrator relies on the LLM reading the list of agents in its 
 Currently, agents operate independently. The orchestrator calls Agent A, gets the result, and replies to the user. We will allow defining declarative pipelines in `agents.yaml`. Add a `pipelines` section to the YAML where the output of one agent is automatically piped into another. For example, a user could call a `NiceJoke` pipeline that automatically routes the prompt to `DadJokeAgent`, takes the output, and pipes it directly into the `Niceify` Foundry agent before returning to the user.
 
 ## 5. REST API / WebSocket Interface
-**Status:** Not Started
+**Status:** Completed
 
 **Synopsis:** 
 Currently, the system is a CLI application (`main.py`). We will expose the orchestrator as a service. Add a lightweight `api.py` using FastAPI. We can expose a `/chat` endpoint for standard requests and a WebSocket endpoint to support the streaming responses (`async for event, text in workflow.run_stream(...)`) directly to a web frontend.
