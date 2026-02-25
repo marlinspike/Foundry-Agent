@@ -17,7 +17,7 @@ graph TD
     CLI -->|Streamed Response| User
     CLI -->|Prompt| Orch[Orchestrator Agent]
     
-    Orch -->|Direct Answer| CLI
+    Orch -->|Polite Refusal| CLI
     Orch -->|delegate_to_agent| Router{Router}
     
     Router -->|Local Agent| Local[Local Agents]
