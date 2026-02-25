@@ -6,6 +6,10 @@
         },
         "pip": true,
         "uvicorn": true,
-        "pytest": true
+        "pytest": true,
+        "/^source \\.venv/bin/activate && pytest tests/test_parallel_delegation\\.py -v -m \"not integration\" 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }

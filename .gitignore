@@ -1,5 +1,6 @@
 # Python-generated files
 .env
+todo.md
 __pycache__/
 *.py[oc]
 build/

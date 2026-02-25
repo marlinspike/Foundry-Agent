@@ -6,8 +6,13 @@ Agent Framework workflow that routes user prompts to the right specialists.
 Routing
 ───────
   The OrchestratorDirectAgent acts as a router. It is given tools that wrap
-  the other specialist agents. The LLM natively decides which tool to call 
+  the other specialist agents. The LLM natively decides which tool to call
   based on the user's prompt.
+
+Tools exposed to the orchestrator
+──────────────────────────────────
+  • delegate_to_agent               – single-agent routing
+  • delegate_to_multiple_agents     – parallel fan-out to N agents
 
 Workflow Shape
 ──────────────
@@ -15,8 +20,10 @@ Workflow Shape
     └─ OrchestratorExecutor
          └─ OrchestratorDirectAgent
               ├─ calls delegate_to_agent
+              └─ calls delegate_to_multiple_agents
 """
 
+import asyncio
 import logging
 import os
 import json
@@ -45,22 +52,16 @@ logger = logging.getLogger(__name__)
 _global_agents = {}
 _foundry_agent_map = {}
 
-@ai_function
-async def delegate_to_agent(agent_name: str, query: str) -> str:
-    """
-    Delegate a query to a specialist agent.
-    Use this tool to route the user's request to the appropriate agent.
-    Provide the exact agent_name as listed in your instructions.
-    """
+async def _invoke_agent(agent_name: str, query: str) -> str:
+    """Core coroutine: invoke a single named agent with a query. Shared by both delegation tools."""
     # 1. Check local agents
     if agent := _global_agents.get(agent_name):
         response = await agent.run([ChatMessage(role=Role.USER, text=query)])
         return response.text
-        
-    # 2. Check Foundry agents
+
+    # 2. Check Foundry agents (only if explicitly mapped in config)
     from foundry_tools import invoke_foundry_agent
-    
-    # Only attempt to call Foundry if it's explicitly mapped in our config
+
     if agent_name in _foundry_agent_map:
         try:
             env_var_name = _foundry_agent_map.get(agent_name)
@@ -68,9 +69,62 @@ async def delegate_to_agent(agent_name: str, query: str) -> str:
             return await invoke_foundry_agent(actual_name, query)
         except Exception as e:
             return f"Agent '{agent_name}' not available. Error: {e}"
-            
-    # 3. If it's neither a local agent nor a mapped Foundry agent, return an error
+
+    # 3. Neither local nor Foundry
     return f"Error: Agent '{agent_name}' is not a recognized specialist."
+
+
+@ai_function
+async def delegate_to_agent(agent_name: str, query: str) -> str:
+    """
+    Delegate a query to a single specialist agent.
+    Use this tool when the user's request maps clearly to one specialist.
+    Provide the exact agent_name as listed in your instructions.
+    """
+    return await _invoke_agent(agent_name, query)
+
+
+@ai_function
+async def delegate_to_multiple_agents(agent_queries: list[dict]) -> str:
+    """
+    Delegate queries to multiple specialist agents IN PARALLEL and return their combined results.
+
+    Use this tool when the user's request spans several domains and can be answered
+    faster or more completely by consulting multiple agents simultaneously.
+
+    agent_queries must be a JSON array of objects, each containing:
+      - "agent_name" (string): exact agent name as listed in your instructions
+      - "query"      (string): the specific question or task for that agent
+
+    Example input:
+      [{"agent_name": "WeatherAgent", "query": "What is the weather in Seattle?"},
+       {"agent_name": "DadJokeAgent",  "query": "Tell me a weather-related dad joke"}]
+
+    Returns a single string with each agent's response clearly labeled.
+    Synthesise all responses into a coherent final answer for the user.
+    """
+    if not agent_queries:
+        return "Error: agent_queries list is empty."
+
+    missing = [
+        i for i, item in enumerate(agent_queries)
+        if "agent_name" not in item or "query" not in item
+    ]
+    if missing:
+        return f"Error: items at index {missing} are missing 'agent_name' or 'query'."
+
+    tasks = [_invoke_agent(item["agent_name"], item["query"]) for item in agent_queries]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    parts = []
+    for item, result in zip(agent_queries, results):
+        name = item["agent_name"]
+        if isinstance(result, Exception):
+            parts.append(f"[{name}]: Error — {result}")
+        else:
+            parts.append(f"[{name}]: {result}")
+
+    return "\n\n".join(parts)
 
 # ---------------------------------------------------------------------------
 # Workflow factory — async context manager

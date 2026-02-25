@@ -23,3 +23,10 @@ foundry-agent = "main:main"
 [tool.uv]
 prerelease = "allow"
 dev-dependencies = []
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: marks tests that require live LLM credentials (deselect with -m 'not integration')",
+]

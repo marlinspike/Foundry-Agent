@@ -16,13 +16,14 @@ graph TD
     User((User)) -->|CLI Input| CLI[CLI main.py]
     CLI -->|Streamed Response| User
     CLI -->|Prompt| Orch[Orchestrator Agent]
-    
+
     Orch -->|Polite Refusal| CLI
-    Orch -->|delegate_to_agent| Router{Router}
-    
+    Orch -->|delegate_to_agent\nsingle domain| Router{Router}
+    Orch -->|delegate_to_multiple_agents\nmulti-domain, parallel| Router
+
     Router -->|Local Agent| Local[Local Agents]
     Router -->|Foundry Agent| Foundry[Azure AI Foundry Agents]
-    
+
     subgraph Local Agents
         Weather[WeatherAgent]
         Joke[DadJokeAgent]
@@ -31,7 +32,7 @@ graph TD
     Local -.-> Weather
     Local -.-> Joke
     Local -.-> KnockKnock
-    
+
     subgraph Cloud Agents
         AF[AF Specialist]
         Niceify[Niceify Agent]
@@ -44,9 +45,12 @@ graph TD
 
 1.  **Orchestrator (`orchestrator.py`)**:
     *   Uses the `agent_framework` to create an `OrchestratorDirectAgent`.
-    *   Equipped with a `delegate_to_agent` tool that allows it to route queries to specific specialist agents by name.
+    *   Equipped with **two routing tools**:
+        *   `delegate_to_agent(agent_name, query)` — routes a single-domain request to one specialist.
+        *   `delegate_to_multiple_agents(agent_queries)` — fans out to multiple specialists **concurrently** via `asyncio.gather`. The tool accepts a list of `{agent_name, query}` objects, runs them all in parallel, and returns labeled results for the orchestrator to synthesise. If one agent fails, the others still succeed (`return_exceptions=True`).
+    *   Both tools share a common `_invoke_agent` coroutine that handles local-vs-Foundry dispatch, keeping the logic in one place.
     *   **Strict Routing Policy**: The orchestrator is explicitly instructed *not* to answer questions using its own general knowledge. If a request cannot be handled by one of its known specialist agents, it will politely decline to assist.
-    *   Dynamically loads local agents from `agents.yaml`.
+    *   Dynamically loads local agents from `agents.yaml` and injects the agent list into the orchestrator's prompt automatically via `{{AGENT_LIST}}`.
     *   Supports multiple LLM providers (Azure AI Foundry, Azure OpenAI, OpenAI) configured via environment variables.
 
 2.  **Specialist Agents**:
@@ -118,6 +122,34 @@ To enable debug logging, run:
 python main.py --debug
 ```
 
+## Parallel Delegation
+
+The orchestrator transparently chooses between single-agent and multi-agent routing based on the user's prompt alone. **No special syntax is required from the user.**
+
+### How it works
+
+The orchestrator's system prompt contains explicit routing rules:
+
+- **Single domain** → calls `delegate_to_agent` once.
+- **Multiple domains** → calls `delegate_to_multiple_agents` with all relevant agents in one shot, fans them out concurrently, then synthesises a single answer.
+
+### Example prompts
+
+| Prompt | Routing | Agents called |
+|---|---|---|
+| `Tell me a dad joke.` | single | `DadJokeAgent` |
+| `What's the weather in Chicago?` | single | `WeatherAgent` |
+| `Tell me a dad joke AND a knock-knock joke.` | **parallel** | `DadJokeAgent`, `KnockKnockJokeAgent` |
+| `What's the weather in Seattle? Also give me a dad joke about rain.` | **parallel** | `WeatherAgent`, `DadJokeAgent` |
+| `Give me a knock-knock joke, a dad joke, and the weather in NYC.` | **parallel** | `KnockKnockJokeAgent`, `DadJokeAgent`, `WeatherAgent` |
+| `Tell me about the F-22 and then make the description nicer.` | sequential\* | `AF` → `Niceify` |
+
+> \* Sequential chaining (pipeline) where the output of one agent feeds into the next is a separate planned feature (Task #4). The orchestrator currently handles this by calling agents one at a time in separate turns.
+
+### Performance benefit
+
+For a 3-agent parallel request, wall time is roughly equal to the **slowest** single agent call rather than the sum of all three. For agents with even modest latency (e.g., 1–2 s each), this is a 2–3× improvement in response time.
+
 ## Adding New Agents
 
 ### Adding a Local Agent
@@ -131,6 +163,8 @@ python main.py --debug
 3.  The `delegate_to_agent` tool in `orchestrator.py` will automatically attempt to resolve and call the Foundry agent by its display name if it's not found locally.
 
 ## Recent Updates
-*   **Streaming Responses**: The orchestrator now streams responses back to the CLI in real-time, significantly reducing perceived latency and improving the user experience.
-*   **Dynamic Agent Loading**: Local agents are now dynamically loaded from `agents.yaml`, making it easier to add and configure new agents without modifying the core orchestrator code.
-*   **Unified Routing**: The `delegate_to_agent` tool now handles routing to both local and cloud-hosted Foundry agents seamlessly.
+*   **Parallel Delegation**: The orchestrator now supports `delegate_to_multiple_agents`, which fans out to N specialist agents concurrently using `asyncio.gather`. Multi-domain prompts are automatically detected and routed in parallel — no user-side changes needed.
+*   **Shared Dispatch Core**: Both delegation tools delegate to a single `_invoke_agent` coroutine, keeping local-vs-Foundry routing logic in one place and eliminating duplication.
+*   **Streaming Responses**: The orchestrator streams responses back to the CLI in real-time, significantly reducing perceived latency and improving the user experience.
+*   **Dynamic Agent Loading with Auto-Injection**: Local agents are dynamically loaded from `agents.yaml`. The agent list is injected into the orchestrator's system prompt automatically via `{{AGENT_LIST}}` — adding a new agent to the YAML is all that's needed.
+*   **Unified Routing**: `delegate_to_agent` handles routing to both local and cloud-hosted Foundry agents seamlessly.
