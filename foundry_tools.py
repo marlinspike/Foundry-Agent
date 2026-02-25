@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import logging
+import functools
 
 from azure.ai.agents.aio import AgentsClient
 from azure.ai.agents.models import (
@@ -32,6 +33,8 @@ from azure.identity.aio import DefaultAzureCredential
 
 logger = logging.getLogger(__name__)
 
+from agent_framework import ai_function
+
 # ---------------------------------------------------------------------------
 # Singleton client
 # ---------------------------------------------------------------------------
@@ -41,34 +44,20 @@ _credential: DefaultAzureCredential | None = None
 
 
 async def _get_client() -> AgentsClient:
-    """Return (or lazily create) the shared AgentsClient.
-
-    Uses AzureKeyCredential when FOUNDRY_USE_KEY_AUTH=true (and FOUNDRY_API_KEY
-    is set), otherwise falls back to DefaultAzureCredential.
-    """
+    """Return (or lazily create) the shared AgentsClient."""
     global _client, _credential
     if _client is None:
         endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"]
-        use_key_auth = os.environ.get("FOUNDRY_USE_KEY_AUTH", "false").lower() == "true"
-        if use_key_auth:
-            api_key = os.environ["FOUNDRY_API_KEY"]
-            key_cred = AzureKeyCredential(api_key)
-            # AzureKeyCredential doesn't implement AsyncTokenCredential (no get_token).
-            # Pass it as authentication_policy so the SDK uses the api-key header
-            # instead of building a BearerTokenCredentialPolicy from the credential.
-            auth_policy = AzureKeyCredentialPolicy(key_cred, "api-key")
-            _credential = None  # AzureKeyCredential has no async close
+        if os.environ.get("FOUNDRY_USE_KEY_AUTH", "false").lower() == "true":
+            key_cred = AzureKeyCredential(os.environ["FOUNDRY_API_KEY"])
             _client = AgentsClient(
                 endpoint=endpoint,
-                credential=key_cred,  # satisfies non-None check; auth_policy takes over
-                authentication_policy=auth_policy,
+                credential=key_cred,
+                authentication_policy=AzureKeyCredentialPolicy(key_cred, "api-key"),
             )
-            logger.debug("AgentsClient initialised with key auth for %s", endpoint)
         else:
-            credential = DefaultAzureCredential()
-            _credential = credential  # keep reference so we can close it
-            _client = AgentsClient(endpoint=endpoint, credential=credential)
-            logger.debug("AgentsClient initialised with DefaultAzureCredential for %s", endpoint)
+            _credential = DefaultAzureCredential()
+            _client = AgentsClient(endpoint=endpoint, credential=_credential)
     return _client
 
 
@@ -176,6 +165,20 @@ async def invoke_foundry_agent(agent_name: str, user_input: str) -> str:
 # Named convenience wrappers (used by the orchestrator as "tools")
 # ---------------------------------------------------------------------------
 
+def foundry_tool(env_var: str, default_name: str):
+    """Decorator to create a tool that invokes a Foundry agent."""
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(text: str) -> str:
+            agent_name = os.environ.get(env_var, default_name)
+            logger.info("[Tool] %s -> '%s'", func.__name__, text[:80])
+            result = await invoke_foundry_agent(agent_name, text)
+            logger.info("[Tool] %s result (%d chars)", func.__name__, len(result))
+            return result
+        return ai_function(wrapper)
+    return decorator
+
+@foundry_tool("AF_AGENT_NAME", "AF")
 async def call_af(question: str) -> str:
     """
     Ask the AF specialist agent about Air Force planes.
@@ -183,23 +186,14 @@ async def call_af(question: str) -> str:
     Use this for any question about specific aircraft (F-22, B-2, F-15 …),
     specifications, capabilities, history, or comparisons.
     """
-    agent_name = os.environ.get("AF_AGENT_NAME", "AF")
-    logger.info("[Tool] call_af -> '%s'", question[:80])
-    result = await invoke_foundry_agent(agent_name, question)
-    logger.info("[Tool] call_af result (%d chars)", len(result))
-    return result
+    pass
 
-
+@foundry_tool("NICEIFY_AGENT_NAME", "Niceify")
 async def call_niceify(text: str) -> str:
     """
     Pass text through the Niceify agent to give it a positive spin.
 
     Use this when the user explicitly asks for positive reframing, or when
-    a previous agent response contains notably negative/sad content and
-    auto-niceify mode is enabled.
+    a previous agent response contains notably negative/sad content.
     """
-    agent_name = os.environ.get("NICEIFY_AGENT_NAME", "Niceify")
-    logger.info("[Tool] call_niceify -> '%s'", text[:80])
-    result = await invoke_foundry_agent(agent_name, text)
-    logger.info("[Tool] call_niceify result (%d chars)", len(result))
-    return result
+    pass

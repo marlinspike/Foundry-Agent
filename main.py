@@ -10,7 +10,6 @@ Slash Commands
 ──────────────
   /af    <question>           Force call the AF (Air Force) specialist agent
   /niceify <text>             Force call the Niceify agent on arbitrary text
-  /auto_niceify on|off        Toggle automatic niceification of negative AF responses
   /history                    Print conversation history for this session
   /clear                      Clear conversation history
   /help                       Show this help text
@@ -79,7 +78,6 @@ HELP_TEXT = textwrap.dedent("""\
     ├─────────────────────────────────────────────────────┤
     │  /af    <question>        Call the AF agent directly │
     │  /niceify <text>          Call Niceify agent directly│
-    │  /auto_niceify on|off     Toggle auto-niceify mode   │
     │  /history                 Show conversation history  │
     │  /clear                   Clear conversation history │
     │  /help                    Show this help             │
@@ -94,11 +92,23 @@ HELP_TEXT = textwrap.dedent("""\
 # CLI session
 # ---------------------------------------------------------------------------
 
+AGENT_COMMANDS = {
+    "/af": {
+        "usage": "/af <your aircraft question>",
+        "status": "Calling AF agent…",
+        "func": call_af
+    },
+    "/niceify": {
+        "usage": "/niceify <text to reframe>",
+        "status": "Calling Niceify agent…",
+        "func": call_niceify
+    }
+}
+
 class CLISession:
     """Maintains per-session state and handles the REPL loop."""
 
-    def __init__(self, auto_niceify: bool) -> None:
-        self.auto_niceify = auto_niceify
+    def __init__(self) -> None:
         self.history: list[dict] = []   # [{"role": "user"|"assistant", "content": str}]
 
     # ── input / output helpers ────────────────────────────────────────────
@@ -127,6 +137,16 @@ class CLISession:
 
     # ── slash-command handlers ────────────────────────────────────────────
 
+    async def _handle_agent_cmd(self, cmd_name: str, args: str, usage: str, status: str, func) -> None:
+        if not args:
+            print(_yellow(f"Usage: {usage}"))
+        else:
+            self._print_status(status)
+            result = await func(args)
+            self._append_history("user", f"[{cmd_name}] {args}")
+            self._append_history("assistant", result)
+            self._print_answer(result)
+
     async def _handle_slash(self, raw: str) -> bool:
         """
         Process a slash command.  Returns True if the REPL should continue,
@@ -143,36 +163,9 @@ class CLISession:
         elif cmd == "/help":
             print(HELP_TEXT)
 
-        elif cmd == "/af":
-            if not args:
-                print(_yellow("Usage: /af <your aircraft question>"))
-            else:
-                self._print_status("Calling AF agent…")
-                result = await call_af(args)
-                self._append_history("user", f"[/af] {args}")
-                self._append_history("assistant", result)
-                self._print_answer(result)
-
-        elif cmd == "/niceify":
-            if not args:
-                print(_yellow("Usage: /niceify <text to reframe>"))
-            else:
-                self._print_status("Calling Niceify agent…")
-                result = await call_niceify(args)
-                self._append_history("user", f"[/niceify] {args}")
-                self._append_history("assistant", result)
-                self._print_answer(result)
-
-        elif cmd == "/auto_niceify":
-            if args.lower() in ("on", "1", "true", "yes"):
-                self.auto_niceify = True
-                print(_green("  ✔ Auto-niceify ON") + " — negative AF responses will be reframed.")
-            elif args.lower() in ("off", "0", "false", "no"):
-                self.auto_niceify = False
-                print(_yellow("  ✔ Auto-niceify OFF"))
-            else:
-                state = "ON" if self.auto_niceify else "OFF"
-                print(f"  Auto-niceify is currently {_bold(state)}. Use '/auto_niceify on' or 'off'.")
+        elif cmd in AGENT_COMMANDS:
+            c = AGENT_COMMANDS[cmd]
+            await self._handle_agent_cmd(cmd, args, c["usage"], c["status"], c["func"])
 
         elif cmd == "/history":
             if not self.history:
@@ -211,10 +204,9 @@ class CLISession:
             + "  " +
             _dim(f"Model : {os.environ.get('FOUNDRY_MODEL_DEPLOYMENT_NAME', '?')}")
         )
-        auto_str = "ON" if self.auto_niceify else "OFF"
-        print(_dim(f"  Auto-niceify: {auto_str}\n"))
+        print()
 
-        async with build_orchestrator(auto_niceify=self.auto_niceify) as orch:
+        async with build_orchestrator() as orch:
             while True:
                 try:
                     raw = self._prompt()
@@ -226,11 +218,6 @@ class CLISession:
                         should_continue = await self._handle_slash(raw)
                         if not should_continue:
                             break
-                        # Auto-niceify may have changed; propagate to workflow.
-                        orch._workflow  # workflow is re-used; auto_niceify flag
-                        # is on the executor which is recreated each run_stream call
-                        # via the lambda factory — so we need to rebuild if it changed.
-                        # (handled below)
                         continue
 
                     # ── natural-language prompt ────────────────────────────
@@ -271,9 +258,7 @@ async def _async_main() -> None:
     debug = "--debug" in sys.argv or "-d" in sys.argv
     _configure_logging(debug)
 
-    auto_niceify = os.environ.get("AUTO_NICEIFY", "false").lower() in ("1", "true", "yes")
-
-    session = CLISession(auto_niceify=auto_niceify)
+    session = CLISession()
     await session.run()
 
 

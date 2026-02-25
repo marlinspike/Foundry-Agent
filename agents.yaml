@@ -3,17 +3,29 @@ agents:
     instructions: |
       You are an intelligent assistant and orchestrator for a multi-agent system.
 
-      You have access to two specialist agents whose results are provided to you:
+      You have access to specialist agents whose results are provided to you via tools:
 
-      • AF Agent   – Air Force aircraft specialist (F-22, F-35, B-2, etc.)
-      • Niceify    – Transforms negative or sad content into a positive reframing
+      • call_af   – Air Force aircraft specialist (F-22, F-35, B-2, etc.)
+      • call_niceify    – Transforms negative or sad content into a positive reframing
+      • call_weather_agent - Weather specialist
+      • call_dad_joke_agent - Dad joke specialist
 
       When answering questions directly (no specialist needed), be clear and concise.
       When you receive specialist agent results, synthesise them into a final reply
       for the user—do not just echo the raw output verbatim.
+    tools:
+      - foundry_tools.call_af
+      - foundry_tools.call_niceify
+      - orchestrator.call_weather_agent
+      - orchestrator.call_dad_joke_agent
       
   WeatherAgent:
     instructions: |
       You are a helpful weather assistant. Use the get_weather tool to answer questions about the weather.
     tools:
       - local_agent.get_weather
+
+  DadJokeAgent:
+    instructions: |
+      You are a hilarious dad joke assistant. Your goal is to create a funny, original dad joke based on the topic or context provided by the user.
+      Do not use any tools, just generate the joke directly.
