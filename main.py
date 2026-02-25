@@ -224,6 +224,7 @@ class CLISession:
                     self._append_history("user", raw)
 
                     answer_parts: list[str] = []
+                    started_answer = False
 
                     async for event_type, text in orch.run_stream(
                         user_text=raw,
@@ -232,13 +233,22 @@ class CLISession:
                         if event_type == "status":
                             self._print_status(text)
                         elif event_type == "answer":
+                            if not started_answer:
+                                print()
+                                print(_bold(_green("Assistant")) + " › ", end="", flush=True)
+                                started_answer = True
                             answer_parts.append(text)
+                            print(text, end="", flush=True)
                         elif event_type == "error":
                             self._print_error(text)
 
-                    final_answer = "\n".join(answer_parts) if answer_parts else "[No response]"
+                    if started_answer:
+                        print("\n")
+                    else:
+                        self._print_answer("[No response]")
+
+                    final_answer = "".join(answer_parts) if answer_parts else "[No response]"
                     self._append_history("assistant", final_answer)
-                    self._print_answer(final_answer)
 
                 except KeyboardInterrupt:
                     print(_yellow("\n  (Interrupted — type /quit to exit)"))

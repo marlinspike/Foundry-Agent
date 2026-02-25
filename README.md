@@ -6,6 +6,33 @@ This project implements a multi-agent orchestrator using the `agent_framework` a
 
 The system is built around a central **Orchestrator Agent** that acts as a router. When a user submits a prompt, the orchestrator analyzes the request and decides whether to answer it directly or delegate it to one of the specialized agents.
 
+```mermaid
+graph TD
+    User((User)) -->|CLI Input| CLI[CLI main.py]
+    CLI -->|Streamed Response| User
+    CLI -->|Prompt| Orch[Orchestrator Agent]
+    
+    Orch -->|Direct Answer| CLI
+    Orch -->|delegate_to_agent| Router{Router}
+    
+    Router -->|Local Agent| Local[Local Agents]
+    Router -->|Foundry Agent| Foundry[Azure AI Foundry Agents]
+    
+    subgraph Local Agents
+        Weather[WeatherAgent]
+        Joke[DadJokeAgent]
+    end
+    Local -.-> Weather
+    Local -.-> Joke
+    
+    subgraph Cloud Agents
+        AF[AF Specialist]
+        Niceify[Niceify Agent]
+    end
+    Foundry -.-> AF
+    Foundry -.-> Niceify
+```
+
 ### Components
 
 1.  **Orchestrator (`orchestrator.py`)**:
@@ -93,3 +120,8 @@ python main.py --debug
 1.  Ensure the agent is deployed in your Azure AI Foundry project.
 2.  Update the `OrchestratorDirectAgent` instructions in `agents.yaml` to make it aware of the new agent.
 3.  The `delegate_to_agent` tool in `orchestrator.py` will automatically attempt to resolve and call the Foundry agent by its display name if it's not found locally.
+
+## Recent Updates
+*   **Streaming Responses**: The orchestrator now streams responses back to the CLI in real-time, significantly reducing perceived latency and improving the user experience.
+*   **Dynamic Agent Loading**: Local agents are now dynamically loaded from `agents.yaml`, making it easier to add and configure new agents without modifying the core orchestrator code.
+*   **Unified Routing**: The `delegate_to_agent` tool now handles routing to both local and cloud-hosted Foundry agents seamlessly.

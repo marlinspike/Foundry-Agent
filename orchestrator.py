@@ -202,8 +202,9 @@ class OrchestratorWorkflow:
         yield ("status", "Thinking…")
         
         try:
-            response = await self._direct_agent.run(messages)
-            yield ("answer", response.text)
+            async for update in self._direct_agent.run_stream(messages):
+                if update.text:
+                    yield ("answer", update.text)
         except Exception as e:
             yield ("error", f"Execution failed: {str(e)}")
 
