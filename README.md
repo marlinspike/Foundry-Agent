@@ -6,6 +6,11 @@ This project implements a multi-agent orchestrator using the `agent_framework` a
 
 The system is built around a central **Orchestrator Agent** that acts as a router. When a user submits a prompt, the orchestrator analyzes the request and decides whether to answer it directly or delegate it to one of the specialized agents.
 
+### Key Innovation: Pure-Text / No-Code Agents
+A major architectural innovation of this project is the **Pure-Text Agent Configuration**. 
+* **The Orchestrator is Pure Text:** The complex routing logic, intent classification, and behavioral constraints are not written in Python `if/else` statements. They are defined entirely in natural language within `agents.yaml`.
+* **Pure-Text Specialist Agents:** You can create entirely new, fully functional agents (like the `DadJokeAgent` or `KnockKnockJokeAgent`) without writing a single line of code. If an agent's job is purely generative or conversational, it can exist entirely as a YAML configuration block. This allows non-developers to rapidly prototype and deploy new agents.
+
 ```mermaid
 graph TD
     User((User)) -->|CLI Input| CLI[CLI main.py]
@@ -21,9 +26,11 @@ graph TD
     subgraph Local Agents
         Weather[WeatherAgent]
         Joke[DadJokeAgent]
+        KnockKnock[KnockKnockJokeAgent]
     end
     Local -.-> Weather
     Local -.-> Joke
+    Local -.-> KnockKnock
     
     subgraph Cloud Agents
         AF[AF Specialist]
@@ -38,6 +45,7 @@ graph TD
 1.  **Orchestrator (`orchestrator.py`)**:
     *   Uses the `agent_framework` to create an `OrchestratorDirectAgent`.
     *   Equipped with a `delegate_to_agent` tool that allows it to route queries to specific specialist agents by name.
+    *   **Strict Routing Policy**: The orchestrator is explicitly instructed *not* to answer questions using its own general knowledge. If a request cannot be handled by one of its known specialist agents, it will politely decline to assist.
     *   Dynamically loads local agents from `agents.yaml`.
     *   Supports multiple LLM providers (Azure AI Foundry, Azure OpenAI, OpenAI) configured via environment variables.
 
@@ -45,6 +53,7 @@ graph TD
     *   **Local Agents** (Defined in `agents.yaml`):
         *   `WeatherAgent`: A local agent equipped with a `get_weather` tool (defined in `local_agent.py`) to answer weather-related questions.
         *   `DadJokeAgent`: A local agent that generates dad jokes directly based on its system instructions.
+        *   `KnockKnockJokeAgent`: A local agent that generates knock-knock jokes directly based on its system instructions.
     *   **Cloud-Hosted Foundry Agents** (Invoked via `foundry_tools.py`):
         *   `AF`: An Air Force aircraft specialist agent hosted on Azure AI Foundry.
         *   `Niceify`: An agent hosted on Azure AI Foundry that transforms negative or sad content into a positive reframing.

@@ -48,13 +48,14 @@ from foundry_tools import call_af, call_niceify
 logger = logging.getLogger(__name__)
 
 _global_agents = {}
+_foundry_agent_map = {}
 
 @ai_function
 async def delegate_to_agent(agent_name: str, query: str) -> str:
     """
     Delegate a query to a specialist agent.
     Use this tool to route the user's request to the appropriate agent.
-    Provide the exact agent_name (e.g., 'WeatherAgent', 'DadJokeAgent', 'AF', 'Niceify').
+    Provide the exact agent_name (e.g., 'WeatherAgent', 'DadJokeAgent', 'KnockKnockJokeAgent', 'AF', 'Niceify').
     """
     # 1. Check local agents
     if agent := _global_agents.get(agent_name):
@@ -63,15 +64,18 @@ async def delegate_to_agent(agent_name: str, query: str) -> str:
         
     # 2. Check Foundry agents
     from foundry_tools import invoke_foundry_agent
-    try:
-        # If it's a Foundry agent, we might need to resolve its env var name or just pass the display name.
-        # invoke_foundry_agent expects the display name (e.g., "AF" or "Niceify").
-        # We'll check if there's an env var override, otherwise use the name directly.
-        env_var_map = {"AF": "AF_AGENT_NAME", "Niceify": "NICEIFY_AGENT_NAME"}
-        actual_name = os.environ.get(env_var_map.get(agent_name, ""), agent_name)
-        return await invoke_foundry_agent(actual_name, query)
-    except Exception as e:
-        return f"Agent '{agent_name}' not available. Error: {e}"
+    
+    # Only attempt to call Foundry if it's explicitly mapped in our config
+    if agent_name in _foundry_agent_map:
+        try:
+            env_var_name = _foundry_agent_map.get(agent_name)
+            actual_name = os.environ.get(env_var_name, agent_name) if env_var_name else agent_name
+            return await invoke_foundry_agent(actual_name, query)
+        except Exception as e:
+            return f"Agent '{agent_name}' not available. Error: {e}"
+            
+    # 3. If it's neither a local agent nor a mapped Foundry agent, return an error
+    return f"Error: Agent '{agent_name}' is not a recognized specialist."
 
 # ---------------------------------------------------------------------------
 # Workflow factory — async context manager
@@ -140,40 +144,45 @@ async def build_orchestrator() -> "AsyncIterator[OrchestratorWorkflow]":
     provider = os.environ.get("MODEL_PROVIDER", "foundry").lower()
     
     async with _build_client(provider) as client:
-        stack, agents = await _load_agents_dynamically(client, "agents.yaml")
+        stack, agents, orch_name = await _load_agents_dynamically(client, "agents.yaml")
         try:
-            yield OrchestratorWorkflow(agents.get("OrchestratorDirectAgent"))
+            yield OrchestratorWorkflow(agents.get(orch_name))
         finally:
             await stack.aclose()
 
 async def _load_agents_dynamically(client, config_path="agents.yaml"):
-    """
-    Dynamically load agents from a YAML configuration file.
-    Returns an AsyncExitStack and a dictionary of loaded agents.
-    """
+    """Dynamically load agents from a YAML configuration file."""
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
         
     stack = AsyncExitStack()
     agents = {}
     
-    for name, details in config.get("agents", {}).items():
-        tools = []
-        for tool_path in details.get("tools", []):
-            module_name, func_name = tool_path.rsplit(".", 1)
-            module = importlib.import_module(module_name)
-            tools.append(getattr(module, func_name))
-            
+    async def _create(name: str, details: dict):
+        tools = [
+            getattr(importlib.import_module(m), f)
+            for m, f in (t.rsplit(".", 1) for t in details.get("tools", []))
+        ]
         agent_ctx = client.create_agent(
             name=name,
             instructions=details.get("instructions", ""),
-            tools=tools if tools else None
+            tools=tools or None
         )
+        agents[name] = _global_agents[name] = await stack.enter_async_context(agent_ctx)
         
-        agents[name] = await stack.enter_async_context(agent_ctx)
-        _global_agents[name] = agents[name]
+    for name, details in config.get("local_agents", {}).items():
+        await _create(name, details)
         
-    return stack, agents
+    # Load Foundry agent mappings
+    for name, details in config.get("foundry_agents", {}).items():
+        if env_var := details.get("env_var"):
+            _foundry_agent_map[name] = env_var
+        
+    orch = config.get("orchestrator", {})
+    orch_name = orch.get("name", "OrchestratorDirectAgent")
+    await _create(orch_name, orch)
+        
+    return stack, agents, orch_name
 
 # ---------------------------------------------------------------------------
 # OrchestratorWorkflow — public facade

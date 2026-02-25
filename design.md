@@ -7,12 +7,16 @@ This document outlines the core architectural decisions and patterns used in the
 *   **Mechanism:** The orchestrator is given a single, powerful tool: `delegate_to_agent(agent_name, query)`. 
 *   **Why:** This simplifies the orchestrator's prompt and tool schema. Instead of giving the orchestrator 50 different tools for 50 different agents, it only needs to know *how to route* by name.
 *   **Rule:** Do not add individual specialist tools directly to the `OrchestratorDirectAgent`. Instead, update its system instructions in `agents.yaml` to make it aware of new specialist agents it can route to via `delegate_to_agent`.
+*   **Strict Routing Rule:** The orchestrator must act *only* as a router. Its system prompt in `agents.yaml` must explicitly forbid it from answering general knowledge questions itself. If a request falls outside the scope of its known specialist agents, it must return a polite refusal message.
 
-## 2. Configuration-Driven Local Agents
-**Decision:** Local agents are defined declaratively in `agents.yaml` rather than hardcoded in Python.
-*   **Mechanism:** `orchestrator.py` reads `agents.yaml` on startup, dynamically imports the specified tool functions, and instantiates the agents using `agent_framework`.
-*   **Why:** Promotes separation of concerns and allows non-developers to tweak agent prompts and tool assignments without touching Python code.
-*   **Rule:** When adding a new local agent, define its `instructions` and `tools` in `agents.yaml`. Implement the actual tool logic in a separate Python file (e.g., `local_agent.py`) and reference it via its module path (e.g., `local_agent.get_weather`).
+## 2. Configuration-Driven Local Agents (Pure-Text Agents)
+**Decision:** Local agents are defined declaratively in `agents.yaml` rather than hardcoded in Python. This enables a "No-Code" or "Pure-Text" agent architecture.
+*   **Mechanism:** `orchestrator.py` reads `agents.yaml` on startup, dynamically imports the specified tool functions (if any), and instantiates the agents using `agent_framework`.
+*   **Why:** 
+    *   **Innovation:** It allows for the creation of entirely new, fully functional agents (like a `DadJokeAgent`) without writing a single line of Python code, provided they don't need external API tools.
+    *   **Separation of Concerns:** It cleanly separates the *behavior* (the prompt in YAML) from the *execution* (the tool function in Python).
+    *   **Accessibility:** Allows non-developers (prompt engineers, product managers) to tweak agent prompts, add new generative agents, and modify routing logic just by editing a text file.
+*   **Rule:** When adding a new local agent, define its `instructions` and `tools` in `agents.yaml`. If it requires custom logic, implement the tool in a separate Python file (e.g., `local_agent.py`) and reference it via its module path. If it is purely generative, omit the `tools` array entirely.
 
 ## 3. Separation of Cloud Agent Invocation
 **Decision:** Interactions with Azure AI Foundry hosted agents are isolated in `foundry_tools.py`.
@@ -42,4 +46,4 @@ This document outlines the core architectural decisions and patterns used in the
 **To add a Cloud (Foundry) Agent:**
 1. Deploy the agent in Azure AI Foundry.
 2. Update `OrchestratorDirectAgent` instructions in `agents.yaml` so it knows the exact display name of the Foundry agent.
-3. (Optional) Add an environment variable mapping in `delegate_to_agent` if the display name differs from the routing name.
+3. Add an environment variable mapping in the `foundry_agents` section of `agents.yaml` to map the routing name to the environment variable containing the actual Foundry display name.
