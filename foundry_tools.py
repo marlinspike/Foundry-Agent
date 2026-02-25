@@ -165,20 +165,15 @@ async def invoke_foundry_agent(agent_name: str, user_input: str) -> str:
 # Named convenience wrappers (used by the orchestrator as "tools")
 # ---------------------------------------------------------------------------
 
-def foundry_tool(env_var: str, default_name: str):
-    """Decorator to create a tool that invokes a Foundry agent."""
-    def decorator(func):
-        @functools.wraps(func)
-        async def wrapper(text: str) -> str:
-            agent_name = os.environ.get(env_var, default_name)
-            logger.info("[Tool] %s -> '%s'", func.__name__, text[:80])
-            result = await invoke_foundry_agent(agent_name, text)
-            logger.info("[Tool] %s result (%d chars)", func.__name__, len(result))
-            return result
-        return ai_function(wrapper)
-    return decorator
+async def _call_foundry_tool(tool_name: str, env_var: str, default_name: str, input_text: str) -> str:
+    """Helper to invoke a Foundry agent and log the result."""
+    agent_name = os.environ.get(env_var, default_name)
+    logger.info("[Tool] %s -> '%s'", tool_name, input_text[:80])
+    result = await invoke_foundry_agent(agent_name, input_text)
+    logger.info("[Tool] %s result (%d chars)", tool_name, len(result))
+    return result
 
-@foundry_tool("AF_AGENT_NAME", "AF")
+@ai_function
 async def call_af(question: str) -> str:
     """
     Ask the AF specialist agent about Air Force planes.
@@ -186,9 +181,9 @@ async def call_af(question: str) -> str:
     Use this for any question about specific aircraft (F-22, B-2, F-15 …),
     specifications, capabilities, history, or comparisons.
     """
-    pass
+    return await _call_foundry_tool("call_af", "AF_AGENT_NAME", "AF", question)
 
-@foundry_tool("NICEIFY_AGENT_NAME", "Niceify")
+@ai_function
 async def call_niceify(text: str) -> str:
     """
     Pass text through the Niceify agent to give it a positive spin.
@@ -196,4 +191,4 @@ async def call_niceify(text: str) -> str:
     Use this when the user explicitly asks for positive reframing, or when
     a previous agent response contains notably negative/sad content.
     """
-    pass
+    return await _call_foundry_tool("call_niceify", "NICEIFY_AGENT_NAME", "Niceify", text)

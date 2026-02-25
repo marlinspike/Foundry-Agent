@@ -31,16 +31,8 @@ from typing import AsyncIterator
 from uuid import uuid4
 
 from agent_framework import (
-    AgentRunResponseUpdate,
-    AgentRunUpdateEvent,
     ChatMessage,
-    Executor,
     Role,
-    TextContent,
-    WorkflowBuilder,
-    WorkflowContext,
-    WorkflowOutputEvent,
-    handler,
     ai_function,
 )
 from agent_framework.azure import AzureAIClient, AzureOpenAIChatClient
@@ -57,112 +49,29 @@ logger = logging.getLogger(__name__)
 
 _global_agents = {}
 
-def local_agent_tool(agent_name: str):
-    """Decorator to create a tool that invokes a dynamically loaded local agent."""
-    def decorator(func):
-        @functools.wraps(func)
-        async def wrapper(query: str) -> str:
-            agent = _global_agents.get(agent_name)
-            if agent:
-                response = await agent.run([ChatMessage(role=Role.USER, text=query)])
-                return response.text
-            return f"{agent_name} not available."
-        return ai_function(wrapper)
-    return decorator
-
-@local_agent_tool("WeatherAgent")
-async def call_weather_agent(query: str) -> str:
-    """Use this tool when the user asks about the weather."""
-    pass
-
-@local_agent_tool("DadJokeAgent")
-async def call_dad_joke_agent(query: str) -> str:
-    """Use this tool when the user asks for a joke, pun, or something funny."""
-    pass
-
-# ---------------------------------------------------------------------------
-# Orchestrator Executor
-# ---------------------------------------------------------------------------
-
-class OrchestratorExecutor(Executor):
+@ai_function
+async def delegate_to_agent(agent_name: str, query: str) -> str:
     """
-    Single-node workflow executor that handles routing and execution.
-
-    Parameters
-    ----------
-    agents:         A dictionary of loaded agents.
+    Delegate a query to a specialist agent.
+    Use this tool to route the user's request to the appropriate agent.
+    Provide the exact agent_name (e.g., 'WeatherAgent', 'DadJokeAgent', 'AF', 'Niceify').
     """
-
-    def __init__(self, agents: dict, id: str = "Orchestrator") -> None:
-        self._agents = agents
-        self._direct_agent = agents.get("OrchestratorDirectAgent")
-        super().__init__(id=id)
-
-    # ── main handler ─────────────────────────────────────────────────────────
-
-    @handler
-    async def handle(self, messages: list[ChatMessage], ctx: WorkflowContext[Never, str]) -> None:
-        """Receive the conversation, route it, and yield the final answer."""
-
-        await self._emit_status(ctx, "Thinking…")
-        response = await self._direct_agent.run(messages)
-        final = response.text
-
-        await ctx.yield_output(final)
-
-    # ── helpers ──────────────────────────────────────────────────────────────
-
-    async def _emit_status(self, ctx: WorkflowContext, status_text: str) -> None:
-        """Emit a lightweight status event so the CLI can show progress."""
-        logger.debug("[Orchestrator status] %s", status_text)
-        await ctx.add_event(
-            AgentRunUpdateEvent(
-                self.id,
-                data=AgentRunResponseUpdate(
-                    contents=[TextContent(text=f"⟳ {status_text}")],
-                    role=Role.ASSISTANT,
-                    response_id=str(uuid4()),
-                ),
-            )
-        )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-async def load_agents_dynamically(client, config_path="agents.yaml"):
-    """
-    Dynamically load agents from a YAML configuration file.
-    Returns an AsyncExitStack and a dictionary of loaded agents.
-    """
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    # 1. Check local agents
+    if agent := _global_agents.get(agent_name):
+        response = await agent.run([ChatMessage(role=Role.USER, text=query)])
+        return response.text
         
-    stack = AsyncExitStack()
-    agents = {}
-    
-    for name, details in config.get("agents", {}).items():
-        # 1. Dynamically resolve tool functions from strings (e.g., "local_agent.get_weather")
-        tools = []
-        for tool_path in details.get("tools", []):
-            module_name, func_name = tool_path.rsplit(".", 1)
-            module = importlib.import_module(module_name)
-            tools.append(getattr(module, func_name))
-            
-        # 2. Create the agent context manager
-        agent_ctx = client.create_agent(
-            name=name,
-            instructions=details.get("instructions", ""),
-            tools=tools if tools else None
-        )
-        
-        # 3. Enter the context and store the yielded agent
-        agents[name] = await stack.enter_async_context(agent_ctx)
-        _global_agents[name] = agents[name]
-        
-    return stack, agents
-
+    # 2. Check Foundry agents
+    from foundry_tools import invoke_foundry_agent
+    try:
+        # If it's a Foundry agent, we might need to resolve its env var name or just pass the display name.
+        # invoke_foundry_agent expects the display name (e.g., "AF" or "Niceify").
+        # We'll check if there's an env var override, otherwise use the name directly.
+        env_var_map = {"AF": "AF_AGENT_NAME", "Niceify": "NICEIFY_AGENT_NAME"}
+        actual_name = os.environ.get(env_var_map.get(agent_name, ""), agent_name)
+        return await invoke_foundry_agent(actual_name, query)
+    except Exception as e:
+        return f"Agent '{agent_name}' not available. Error: {e}"
 
 # ---------------------------------------------------------------------------
 # Workflow factory — async context manager
@@ -231,26 +140,40 @@ async def build_orchestrator() -> "AsyncIterator[OrchestratorWorkflow]":
     provider = os.environ.get("MODEL_PROVIDER", "foundry").lower()
     
     async with _build_client(provider) as client:
-        stack, agents = await load_agents_dynamically(client, "agents.yaml")
+        stack, agents = await _load_agents_dynamically(client, "agents.yaml")
         try:
-            yield _make_workflow(agents)
+            yield OrchestratorWorkflow(agents.get("OrchestratorDirectAgent"))
         finally:
             await stack.aclose()
 
-
-def _make_workflow(agents: dict) -> "OrchestratorWorkflow":
-    """Build the AgentFramework workflow and wrap it in OrchestratorWorkflow."""
-    workflow = (
-        WorkflowBuilder()
-        .register_executor(
-            lambda: OrchestratorExecutor(agents),
-            name="Orchestrator",
+async def _load_agents_dynamically(client, config_path="agents.yaml"):
+    """
+    Dynamically load agents from a YAML configuration file.
+    Returns an AsyncExitStack and a dictionary of loaded agents.
+    """
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+        
+    stack = AsyncExitStack()
+    agents = {}
+    
+    for name, details in config.get("agents", {}).items():
+        tools = []
+        for tool_path in details.get("tools", []):
+            module_name, func_name = tool_path.rsplit(".", 1)
+            module = importlib.import_module(module_name)
+            tools.append(getattr(module, func_name))
+            
+        agent_ctx = client.create_agent(
+            name=name,
+            instructions=details.get("instructions", ""),
+            tools=tools if tools else None
         )
-        .set_start_executor("Orchestrator")
-        .build()
-    )
-    return OrchestratorWorkflow(workflow)
-
+        
+        agents[name] = await stack.enter_async_context(agent_ctx)
+        _global_agents[name] = agents[name]
+        
+    return stack, agents
 
 # ---------------------------------------------------------------------------
 # OrchestratorWorkflow — public facade
@@ -259,47 +182,30 @@ def _make_workflow(agents: dict) -> "OrchestratorWorkflow":
 class OrchestratorWorkflow:
     """
     Thin facade over the Agent Framework Workflow.
-
-    Methods
-    -------
-    run(user_text, history)   → str
-        Process a user message and return the final answer.
-
-    run_stream(user_text, history)  → AsyncIterator[str]
-        Stream status events and then the final answer.
     """
 
-    def __init__(self, workflow) -> None:
-        self._workflow = workflow
+    def __init__(self, direct_agent) -> None:
+        self._direct_agent = direct_agent
 
     async def run(self, user_text: str, history: list[dict] | None = None) -> str:
         messages = _build_messages(user_text, history)
-        events = await self._workflow.run(messages)
-        outputs = events.get_outputs()
-        return outputs[0] if outputs else "[No output]"
+        response = await self._direct_agent.run(messages)
+        return response.text
 
     async def run_stream(self, user_text: str, history: list[dict] | None = None) -> AsyncIterator[tuple[str, str]]:
         """
         Async generator that yields (event_type, text) tuples.
-
-        event_type is one of:
-            "status"  — progress indicator (e.g. "Calling AF agent…")
-            "answer"  — the final answer
-            "error"   — something went wrong
         """
         messages = _build_messages(user_text, history)
-        from agent_framework import WorkflowOutputEvent, ExecutorFailedEvent, WorkflowFailedEvent
-
-        async for event in self._workflow.run_stream(messages):
-            if isinstance(event, AgentRunUpdateEvent):
-                text = _extract_text(event.data)
-                if text:
-                    yield ("status", text)
-            elif isinstance(event, WorkflowOutputEvent):
-                yield ("answer", str(event.data))
-            elif isinstance(event, (ExecutorFailedEvent, WorkflowFailedEvent)):
-                details = event.details
-                yield ("error", f"{details.error_type}: {details.message}")
+        
+        # Yield a status event to mimic the old OrchestratorExecutor behavior
+        yield ("status", "Thinking…")
+        
+        try:
+            response = await self._direct_agent.run(messages)
+            yield ("answer", response.text)
+        except Exception as e:
+            yield ("error", f"Execution failed: {str(e)}")
 
 
 # ---------------------------------------------------------------------------
@@ -315,10 +221,3 @@ def _build_messages(user_text: str, history: list[dict] | None) -> list[ChatMess
             messages.append(ChatMessage(role=role, text=entry["content"]))
     messages.append(ChatMessage(role=Role.USER, text=user_text))
     return messages
-
-
-def _extract_text(update: AgentRunResponseUpdate) -> str:
-    for content in update.contents:
-        if isinstance(content, TextContent):
-            return content.text
-    return ""

@@ -14,10 +14,7 @@ agents:
       When you receive specialist agent results, synthesise them into a final reply
       for the user—do not just echo the raw output verbatim.
     tools:
-      - foundry_tools.call_af
-      - foundry_tools.call_niceify
-      - orchestrator.call_weather_agent
-      - orchestrator.call_dad_joke_agent
+      - orchestrator.delegate_to_agent
       
   WeatherAgent:
     instructions: |
