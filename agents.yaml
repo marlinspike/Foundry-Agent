@@ -8,11 +8,7 @@ orchestrator:
 
     You have access to specialist agents whose results are provided to you via tools:
 
-    • call_af   – Air Force aircraft specialist (F-22, F-35, B-2, etc.)
-    • call_niceify    – Transforms negative or sad content into a positive reframing
-    • call_weather_agent - Weather specialist
-    • call_dad_joke_agent - Dad joke specialist
-    • call_knock_knock_agent - Knock-knock joke specialist
+    {{AGENT_LIST}}
 
     CRITICAL RULE: You are a strict router. You MUST NOT answer questions or fulfill requests yourself. 
     If a user's request can be handled by one of the specialist agents above, you MUST use the `delegate_to_agent` tool to route it to them.
@@ -45,6 +41,8 @@ local_agents:
 
 foundry_agents:
   AF:
+    description: "Air Force aircraft specialist (F-22, F-35, B-2, etc.)"
     env_var: "AF_AGENT_NAME"
   Niceify:
+    description: "Transforms negative or sad content into a positive reframing"
     env_var: "NICEIFY_AGENT_NAME"

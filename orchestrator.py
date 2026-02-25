@@ -6,18 +6,15 @@ Agent Framework workflow that routes user prompts to the right specialists.
 Routing
 ───────
   The OrchestratorDirectAgent acts as a router. It is given tools that wrap
-  the other specialist agents (AF, Niceify, Weather, Dad Joke). The LLM
-  natively decides which tool to call based on the user's prompt.
+  the other specialist agents. The LLM natively decides which tool to call 
+  based on the user's prompt.
 
 Workflow Shape
 ──────────────
   WorkflowBuilder
     └─ OrchestratorExecutor
          └─ OrchestratorDirectAgent
-              ├─ calls foundry_tools.call_af
-              ├─ calls foundry_tools.call_niceify
-              ├─ calls orchestrator.call_weather_agent
-              └─ calls orchestrator.call_dad_joke_agent
+              ├─ calls delegate_to_agent
 """
 
 import logging
@@ -43,8 +40,6 @@ from azure.identity import DefaultAzureCredential as SyncDefaultAzureCredential
 from azure.identity.aio import DefaultAzureCredential
 from typing_extensions import Never
 
-from foundry_tools import call_af, call_niceify
-
 logger = logging.getLogger(__name__)
 
 _global_agents = {}
@@ -55,7 +50,7 @@ async def delegate_to_agent(agent_name: str, query: str) -> str:
     """
     Delegate a query to a specialist agent.
     Use this tool to route the user's request to the appropriate agent.
-    Provide the exact agent_name (e.g., 'WeatherAgent', 'DadJokeAgent', 'KnockKnockJokeAgent', 'AF', 'Niceify').
+    Provide the exact agent_name as listed in your instructions.
     """
     # 1. Check local agents
     if agent := _global_agents.get(agent_name):
@@ -157,6 +152,7 @@ async def _load_agents_dynamically(client, config_path="agents.yaml"):
         
     stack = AsyncExitStack()
     agents = {}
+    agent_list_lines = []
     
     async def _create(name: str, details: dict):
         tools = [
@@ -171,15 +167,27 @@ async def _load_agents_dynamically(client, config_path="agents.yaml"):
         agents[name] = _global_agents[name] = await stack.enter_async_context(agent_ctx)
         
     for name, details in config.get("local_agents", {}).items():
+        desc = details.get("description", "No description provided.")
+        agent_list_lines.append(f"    • {name} - {desc}")
         await _create(name, details)
         
     # Load Foundry agent mappings
     for name, details in config.get("foundry_agents", {}).items():
+        desc = details.get("description", "No description provided.")
+        agent_list_lines.append(f"    • {name} - {desc}")
         if env_var := details.get("env_var"):
             _foundry_agent_map[name] = env_var
+            
+    agent_list_str = "\n".join(agent_list_lines)
         
     orch = config.get("orchestrator", {})
     orch_name = orch.get("name", "OrchestratorDirectAgent")
+    
+    # Inject AGENT_LIST into orchestrator instructions
+    instructions = orch.get("instructions", "")
+    if "{{AGENT_LIST}}" in instructions:
+        orch["instructions"] = instructions.replace("{{AGENT_LIST}}", agent_list_str)
+        
     await _create(orch_name, orch)
         
     return stack, agents, orch_name
