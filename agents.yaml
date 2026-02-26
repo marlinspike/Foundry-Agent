@@ -65,7 +65,7 @@ local_agents:
 
 foundry_agents:
   AF:
-    description: "Air Force aircraft specialist (F-22, F-35, B-2, etc.)"
+    description: "Air Force aircraft agent that can answer questions about various planes it has data on (F-22, F-35, B-2, etc.)"
     env_var: "AF_AGENT_NAME"
   Niceify:
     description: "Transforms negative or sad content into a positive reframing"

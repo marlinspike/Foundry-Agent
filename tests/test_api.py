@@ -26,10 +26,11 @@ def test_health_endpoint(client):
     assert data["status"] == "ok"
     assert data["service"] == "Foundry-Agent API"
 
+@pytest.mark.integration
 def test_rest_chat_endpoint(client):
     """Test the REST /chat endpoint."""
     payload = {
-        "user_text": "Tell me a dad joke"
+        "content": "Tell me a dad joke"
     }
     response = client.post("/chat", json=payload)
     
@@ -39,12 +40,13 @@ def test_rest_chat_endpoint(client):
     assert isinstance(data["answer"], str)
     assert len(data["answer"]) > 0
 
+@pytest.mark.integration
 def test_websocket_chat_endpoint(client):
     """Test the WebSocket /ws/chat endpoint."""
     with client.websocket_connect("/ws/chat") as websocket:
         # Send a request
         websocket.send_json({
-            "user_text": "Tell me a dad joke"
+            "content": "Tell me a dad joke"
         })
         
         # Receive the streamed response
@@ -66,7 +68,7 @@ def test_websocket_chat_endpoint(client):
 def test_rest_chat_endpoint_missing_field(client):
     """Test the REST /chat endpoint with invalid payload."""
     payload = {
-        # Missing 'user_text'
+        # Missing 'content'
         "history": []
     }
     response = client.post("/chat", json=payload)

@@ -7,7 +7,7 @@ async def test_websocket():
     async with websockets.connect(uri) as websocket:
         # Send a message
         request = {
-            "user_text": "Tell me a dad joke"
+            "content": "Tell me a dad joke"
         }
         await websocket.send(json.dumps(request))
         

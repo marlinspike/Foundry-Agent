@@ -8,8 +8,7 @@ Command-line interface for the multi-agent orchestrator.
 
 Slash Commands
 ──────────────
-  /af    <question>           Force call the AF (Air Force) specialist agent
-  /niceify <text>             Force call the Niceify agent on arbitrary text
+  /agent <name> <query>       Force-call any named agent directly
   /history                    Print conversation history for this session
   /clear                      Clear conversation history
   /help                       Show this help text
@@ -29,8 +28,8 @@ from dotenv import load_dotenv
 # Load .env before importing any project modules so env vars are available.
 load_dotenv(override=True)
 
-from agent.foundry_tools import call_af, call_niceify, close_client
-from agent.orchestrator import build_orchestrator
+from agent.foundry_tools import close_client
+from agent.orchestrator import build_orchestrator, _invoke_agent
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -73,37 +72,23 @@ def _bold(t: str)  -> str: return _c("1", t)
 # ---------------------------------------------------------------------------
 
 HELP_TEXT = textwrap.dedent("""\
-    ┌─────────────────────────────────────────────────────┐
-    │              Multi-Agent CLI  —  Commands            │
-    ├─────────────────────────────────────────────────────┤
-    │  /af    <question>        Call the AF agent directly │
-    │  /niceify <text>          Call Niceify agent directly│
-    │  /history                 Show conversation history  │
-    │  /clear                   Clear conversation history │
-    │  /help                    Show this help             │
-    │  /quit  or  /exit         Exit                       │
-    │                                                      │
-    │  Tip: Just type a question for smart routing.        │
-    └─────────────────────────────────────────────────────┘
+    ┌──────────────────────────────────────────────────────────┐
+    │               Multi-Agent CLI  —  Commands               │
+    ├──────────────────────────────────────────────────────────┤
+    │  /agent <name> <query>    Call any named agent directly   │
+    │  /history                 Show conversation history       │
+    │  /clear                   Clear conversation history      │
+    │  /help                    Show this help                  │
+    │  /quit  or  /exit         Exit                            │
+    │                                                           │
+    │  Tip: Just type a question for smart routing.             │
+    └──────────────────────────────────────────────────────────┘
 """)
 
 
 # ---------------------------------------------------------------------------
 # CLI session
 # ---------------------------------------------------------------------------
-
-AGENT_COMMANDS = {
-    "/af": {
-        "usage": "/af <your aircraft question>",
-        "status": "Calling AF agent…",
-        "func": call_af
-    },
-    "/niceify": {
-        "usage": "/niceify <text to reframe>",
-        "status": "Calling Niceify agent…",
-        "func": call_niceify
-    }
-}
 
 class CLISession:
     """Maintains per-session state and handles the REPL loop."""
@@ -137,16 +122,6 @@ class CLISession:
 
     # ── slash-command handlers ────────────────────────────────────────────
 
-    async def _handle_agent_cmd(self, cmd_name: str, args: str, usage: str, status: str, func) -> None:
-        if not args:
-            print(_yellow(f"Usage: {usage}"))
-        else:
-            self._print_status(status)
-            result = await func(args)
-            self._append_history("user", f"[{cmd_name}] {args}")
-            self._append_history("assistant", result)
-            self._print_answer(result)
-
     async def _handle_slash(self, raw: str) -> bool:
         """
         Process a slash command.  Returns True if the REPL should continue,
@@ -163,9 +138,17 @@ class CLISession:
         elif cmd == "/help":
             print(HELP_TEXT)
 
-        elif cmd in AGENT_COMMANDS:
-            c = AGENT_COMMANDS[cmd]
-            await self._handle_agent_cmd(cmd, args, c["usage"], c["status"], c["func"])
+        elif cmd == "/agent":
+            sub = args.split(maxsplit=1)
+            if len(sub) < 2:
+                print(_yellow("Usage: /agent <agent_name> <query>"))
+            else:
+                agent_name, query = sub[0], sub[1]
+                self._print_status(f"Calling {agent_name} agent…")
+                result = await _invoke_agent(agent_name, query)
+                self._append_history("user", f"[/agent {agent_name}] {query}")
+                self._append_history("assistant", result)
+                self._print_answer(result)
 
         elif cmd == "/history":
             if not self.history:

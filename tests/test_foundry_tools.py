@@ -51,8 +51,8 @@ async def test_resolve_agent_id():
         await _resolve_agent_id(mock_client, "Agent3")
 
 @pytest.mark.asyncio
-@patch("foundry_tools._get_client")
-@patch("foundry_tools._resolve_agent_id")
+@patch("agent.foundry_tools._get_client")
+@patch("agent.foundry_tools._resolve_agent_id")
 async def test_invoke_foundry_agent(mock_resolve, mock_get_client):
     """Test that invoke_foundry_agent correctly interacts with the client."""
     # Setup mocks

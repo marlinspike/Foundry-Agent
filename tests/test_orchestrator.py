@@ -12,6 +12,7 @@ load_dotenv(override=True)
 from agent.orchestrator import build_orchestrator
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_orchestrator_basic_routing():
     """Test that the orchestrator can route a simple request to an agent."""
     async with build_orchestrator() as orch:
@@ -24,6 +25,7 @@ async def test_orchestrator_basic_routing():
         # The response should ideally contain a joke, but we just check it's not empty
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_orchestrator_parallel_routing():
     """Test that the orchestrator can handle parallel requests."""
     async with build_orchestrator() as orch:

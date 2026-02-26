@@ -186,7 +186,7 @@ async def test_orchestrator_multi_domain_routing():
        not os.environ.get("OPENAI_API_KEY"):
         pytest.skip("No LLM credentials found; skipping integration test.")
 
-    from orchestrator import build_orchestrator
+    from agent.orchestrator import build_orchestrator
 
     async with build_orchestrator() as orch:
         response = await orch.run(

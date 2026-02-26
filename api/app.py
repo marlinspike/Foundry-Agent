@@ -24,7 +24,7 @@ class Message(BaseModel):
     content: str = Field(..., description="The content of the message")
 
 class ChatRequest(BaseModel):
-    user_text: str = Field(..., description="The user's input text")
+    content: str = Field(..., description="The user's input text")
     history: Optional[List[Message]] = Field(default=None, description="Optional chat history")
 
 class ChatResponse(BaseModel):
@@ -66,7 +66,7 @@ async def chat_endpoint(
     """
     try:
         history_dicts = [msg.model_dump() for msg in request.history] if request.history else None
-        answer = await orch.run(user_text=request.user_text, history=history_dicts)
+        answer = await orch.run(user_text=request.content, history=history_dicts)
         return ChatResponse(answer=answer)
     except Exception as e:
         logger.exception("Error processing chat request")
@@ -104,7 +104,7 @@ async def handle_websocket_message(websocket: WebSocket, data: Dict[str, Any], o
     history_dicts = [msg.model_dump() for msg in request.history] if request.history else None
     
     try:
-        async for event_type, text in orch.run_stream(user_text=request.user_text, history=history_dicts):
+        async for event_type, text in orch.run_stream(user_text=request.content, history=history_dicts):
             await websocket.send_json(StreamEvent(type=event_type, text=text).model_dump())
         await websocket.send_json(StreamEvent(type="done", text="").model_dump())
     except Exception as e:

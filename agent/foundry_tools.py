@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import os
 import logging
-import functools
 
 from azure.ai.agents.aio import AgentsClient
 from azure.ai.agents.models import (
@@ -32,8 +31,6 @@ from azure.core.pipeline.policies import AzureKeyCredentialPolicy
 from azure.identity.aio import DefaultAzureCredential
 
 logger = logging.getLogger(__name__)
-
-from agent_framework import ai_function
 
 # ---------------------------------------------------------------------------
 # Singleton client
@@ -161,34 +158,4 @@ async def invoke_foundry_agent(agent_name: str, user_input: str) -> str:
         return f"[Unexpected error calling {agent_name}: {exc}]"
 
 
-# ---------------------------------------------------------------------------
-# Named convenience wrappers (used by the orchestrator as "tools")
-# ---------------------------------------------------------------------------
 
-async def _call_foundry_tool(tool_name: str, env_var: str, default_name: str, input_text: str) -> str:
-    """Helper to invoke a Foundry agent and log the result."""
-    agent_name = os.environ.get(env_var, default_name)
-    logger.info("[Tool] %s -> '%s'", tool_name, input_text[:80])
-    result = await invoke_foundry_agent(agent_name, input_text)
-    logger.info("[Tool] %s result (%d chars)", tool_name, len(result))
-    return result
-
-@ai_function
-async def call_af(question: str) -> str:
-    """
-    Ask the AF specialist agent about Air Force planes.
-
-    Use this for any question about specific aircraft (F-22, B-2, F-15 …),
-    specifications, capabilities, history, or comparisons.
-    """
-    return await _call_foundry_tool("call_af", "AF_AGENT_NAME", "AF", question)
-
-@ai_function
-async def call_niceify(text: str) -> str:
-    """
-    Pass text through the Niceify agent to give it a positive spin.
-
-    Use this when the user explicitly asks for positive reframing, or when
-    a previous agent response contains notably negative/sad content.
-    """
-    return await _call_foundry_tool("call_niceify", "NICEIFY_AGENT_NAME", "Niceify", text)
